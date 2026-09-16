@@ -24,6 +24,7 @@ module mp3_frame_parser (
     output reg [1:0] mode_extension,
     output reg [9:0] frame_len,       // total frame length in bytes, including the 4-byte header
     output reg [8:0] main_data_begin,
+    output reg sample_rate_44k1,      // 1 = 44100 Hz, 0 = 48000 Hz (the only two accepted rates)
 
     output reg scfsi [0:1][0:3],
 
@@ -157,6 +158,7 @@ always @(posedge clk) begin
             protection_bit <= hdr_buf[1][0];
             bitrate_idx <= hdr_buf[2][7:4];
             sr_idx <= hdr_buf[2][3:2];
+            sample_rate_44k1 <= hdr_buf[2][3:2] == 2'd0;
             padding <= hdr_buf[2][1];
             channel_mode <= hdr_buf[3][7:6];
             mode_extension <= hdr_buf[3][5:4];
