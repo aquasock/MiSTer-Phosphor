@@ -45,7 +45,11 @@ module mp3_antialias (
     output reg signed [31:0] out_data,
     output reg out_wsf,
     output reg [1:0] out_bt,
-    output reg out_mbf
+    output reg out_mbf,
+
+    // True when nothing is in progress or queued -- see mp3_stereo.sv's
+    // header comment on this same port for the real-hardware pacing need.
+    output wire idle
 );
 
 // Number of subband boundaries to process (see module header / reference):
@@ -135,6 +139,7 @@ localparam
     S_STREAM_READ  = 7, S_STREAM_EMIT = 8;
 
 reg [3:0] state;
+assign idle = (state == 4'd0) && (q_count == 2'd0);
 reg [5:0] num_boundaries;
 reg [5:0] boundary_i;   // 0..num_boundaries-1
 reg [2:0] tap_j;        // 0..7

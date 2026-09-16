@@ -85,7 +85,16 @@ module mp3_stereo (
     // input lagged far enough behind frame_valid -- see docs/MP3.md.
     output reg out_wsf,
     output reg [1:0] out_bt,
-    output reg out_mbf
+    output reg out_mbf,
+
+    // True when this module has nothing in progress and nothing queued --
+    // used by the top-level player to gate how fast the file reader may
+    // feed new frames on real hardware, where (unlike a live broadcast
+    // stream) nothing else naturally paces byte arrival to real playback
+    // time. See mp3_synthesis_tb.sv's header comment for the identical
+    // gating logic this mirrors, now promoted from a testbench-only
+    // technique to a real, permanent part of the player shell.
+    output wire idle
 );
 
 reg l_stereo;
@@ -417,6 +426,7 @@ localparam
     S_STREAM_CH_NEXT  = 22;
 
 reg [4:0] state;
+assign idle = (state == 5'd0) && (q_count == 2'd0);
 
 // Stereo-scan working registers.
 reg is_long;              // 0 = scanning short bands, 1 = scanning long bands

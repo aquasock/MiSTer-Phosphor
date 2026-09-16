@@ -609,6 +609,336 @@ address bus) and added only 5 more M10K blocks (the short table's extra
 entire datapath, so it was essentially free in resource terms. Still
 comfortably within budget.
 
+## Polyphase synthesis filterbank (step 8) -- decoder is now complete, real PCM out
+
+`rtl/mp3_synthesis.sv`. Converts the IMDCT's 32 subband samples per time
+slot into 32 interleaved PCM samples per time slot, per ISO/IEC 11172-3's
+direct synthesis subband filter definition -- shared, unmodified spec
+machinery across Layer I/II/III (MP3's own contribution to the pipeline
+ends at the IMDCT). Implemented from the direct O(64*32 + 512) definition
+(matrixing: `V[i] = round(sum_k(S[k] * cos((16+i)*(2k+1)*pi/64)), 16)`,
+`i`=0..63, `k`=0..31; windowing: for each of 32 outputs `j`, 16 terms
+drawn from `V`'s persistent history at logical positions `(128m+j)` and
+`(128m+96+j)`, `m`=0..7, paired with window coefficients at `(64m+j)` and
+`(64m+32+j)`), not FFmpeg's fast algorithm (a hand-factorized 32-point
+DCT-III fused with a circular-buffer trick, `ff_dct32`).
+
+**Unlike every other window in this project, there's no closed-form
+formula for this one to independently derive and cross-check** -- the
+512-tap polyphase prototype filter is just the ISO standard's published
+constants, identical in every compliant decoder. Transcribed
+programmatically from FFmpeg's `ff_mpa_enwindow` (`mpegaudiodsp_data.c`,
+257 values) to avoid manual-transcription error (the antialiasing-stage
+lesson), then expanded to the full 512 entries via the documented
+construction rule.
+
+**The matrixing formula and the window's absolute scale were each
+independently verified against real FFmpeg output, not trusted from
+memory:**
+1. Confirmed FFmpeg's own `ff_dct32` uses a *different*, structurally
+   unrelated 32-point DCT-III basis (`cos(pi/32*(k+0.5)*i)`, verified by
+   feeding unit impulses through the real compiled `dct32_float` object
+   file) -- proving its circular-buffer-based fast algorithm is a
+   genuinely different (though output-equivalent) reformulation, not
+   something to reverse-engineer index-by-index against the direct
+   `(16+i)` formula.
+2. Ran the full direct-definition algorithm (properly warmed up across
+   several frames -- an early version of this check started cold at an
+   arbitrary later frame and produced garbage-looking ratios that were a
+   warm-up bug in the *test*, not the algorithm) against real FFmpeg PCM
+   output using FFmpeg's own real internal sb_samples as input: the raw
+   accumulator (unscaled float cosines, raw integer window) needed
+   *exactly* a 2^24 final shift to match real int16 PCM -- matching
+   FFmpeg's own `OUT_SHIFT = WFRAC_BITS + FRAC_BITS - 15` convention
+   exactly, confirming both the formula and that the window's natural
+   (raw-integer) scale is the right one to build on.
+3. This project's own upstream pipeline was then measured directly (not
+   assumed) to already produce sb_samples on essentially the *same*
+   absolute scale as FFmpeg's real internal ones (ratio 1.0000, ~0.02%
+   noise) -- so this stage reuses FFmpeg's real window scale and 24-bit
+   shift directly, the only stage in this project that does, because it's
+   the *last* one: its output must BE correctly-scaled 16-bit PCM, not an
+   arbitrarily-scaled intermediate value the way every earlier stage was
+   free to be. Confirmed end to end: this project's own validated
+   sb_samples run through the quantized (Q16 matrixing, 24-bit final
+   shift) fixed-point pipeline land within +/-1 LSB of real FFmpeg PCM
+   output on all 50,688 samples checked.
+
+**The first kind of persistent state in this project that IS the primary
+working data, not an add-on correction** (unlike `mp3_imdct`'s
+overlap-add carry): every PCM sample depends on up to 16 of its channel's
+most recent time slots via a 1024-entry-per-channel history. Implemented
+as a genuine circular buffer (a per-channel base pointer decrementing by
+64, mod 1024, each time slot) rather than a literal shift register:
+writing the fresh 64 values at the new base position and moving the
+pointer achieves the same effect as shifting 960 old values, for free.
+
+**Architecture**: processes per TIME SLOT (32 values), not per whole
+576-value channel like every earlier stage -- since IMDCT's output is
+already time-major, a full 32-value group is available as soon as it
+arrives, no need to buffer a whole channel first. But this module's own
+processing (~64*32 matrixing MACs + ~32*16 windowing MACs, ~3,100 serial
+cycles per time slot) is far slower per unit of channel data than
+anything upstream, worse than the `mp3_imdct` differential that already
+required 4-deep buffering -- a full stereo frame can complete production
+of all 2 granules x 2 channels x 18 time slots = 72 time slots before
+this module drains even the first one. Sized accordingly: a 72-entry
+pending queue (the true worst case for this profile, bounded by the same
+real-time-pacing argument as `mp3_imdct`'s own queue), backed by one flat
+2304-value (72*32) circular buffer.
+
+**Two real bugs found validating this stage:**
+1. **`v_wr_en`/`v_wr_data` registered while `v_addr` was combinational on
+   `state` -- a one-cycle misalignment that silently corrupted every V
+   write.** `v_addr`'s combinational mux selects `v_base_active + i`
+   whenever `state == S_MATRIX_WRITE`; an earlier draft set `v_wr_en <= 1`
+   inside that same state's body as a registered pulse. Because `v_addr`
+   reacts to `state` *immediately* (combinational) while a registered
+   `v_wr_en <= 1` doesn't actually take effect until *one cycle later* --
+   by which point `state` has already advanced to `S_MATRIX_NEXT` and
+   `v_addr` has already reverted to its default (0) -- every write landed
+   at address 0 instead of its intended `v_base+i`, one full cycle after
+   `v_addr` had already moved off that address. Symptom: RTL vs. the
+   Python reference matched exactly for the first ~36 time slots (one
+   full stereo-frame-equivalent of channel warm-up) then diverged sharply
+   and stayed wrong, with reads at addresses that should have held real
+   historical data instead reading back 0. Root-caused by tracing one
+   specific write (confirmed correct data and address computed) against a
+   later read at that same address coming back stale, then confirming the
+   write's enable and address were simply never both valid on the same
+   cycle. Fixed by making `v_wr_en`/`v_wr_data` combinational too, so they
+   align with `v_addr`'s own timing. Different from (though related to)
+   the `mp3_imdct` `ov_addr` lesson: there, the address depended on a
+   counter (`out_i`) that changes in a *later* state than where its
+   write-enable is set, so no misalignment ever existed; here the address
+   depended on `state` itself, the very signal whose transition is what
+   delays a registered enable by a cycle. **General lesson for any future
+   stage**: a write-enable derived from "we just entered state X" must be
+   combinational (`state==X`) whenever the address is *also* a
+   combinational function of that same state -- mixing a registered
+   enable with a combinational same-state address misaligns them by
+   exactly one cycle, and the effect (writes landing at a stale default
+   address) can look like a completely unrelated bug (a corrupted-looking
+   history) rather than an obvious addressing fault.
+2. **Testbench drain-trigger off-by-one, affecting every stage's
+   simulation wall-clock time, not just this one's correctness.**
+   `if (frame_done && frame_count >= NUM_FRAMES) #<delay> $finish;`
+   compares against `frame_count`'s *pre-increment* value (it's
+   incremented via a nonblocking assignment in a separate always block),
+   so this condition can never actually become true -- `frame_count`
+   never reaches `NUM_FRAMES` before `input_valid`'s own gating stops
+   admitting further frames. Every simulation run using this pattern
+   therefore silently fell through to the much longer *outer* safety
+   timeout instead of the intended short post-completion drain (a ~20x
+   difference for this stage: a 2-frame run went from ~20 minutes down to
+   under a minute after the fix). Doesn't affect correctness (the outer
+   timeout still calls `$finish` with all the same captured output, so
+   every prior comparison result in this project is still valid) --
+   purely wasted wall-clock time. Fixed in `mp3_synthesis_tb.sv`
+   (`>= NUM_FRAMES - 1`); the identical pattern still exists unfixed in
+   `mp3_dequant_tb.sv`/`mp3_stereo_tb.sv`/`mp3_antialias_tb.sv`/
+   `mp3_imdct_tb.sv` as of this writing, low priority to fix since it's a
+   speed-only issue.
+
+Validated bit-exact (RTL vs. `tools/mp3_synthesis_reference.py`, all 576
+samples per granule/channel) across all 8 profile test files.
+
+Full pipeline (parser + reservoir + Huffman decoder + dequant + stereo +
+antialias + IMDCT + synthesis) real Quartus fit on the `5CSEBA6U23I7`:
+4,056 ALMs (10%), 2,832 registers, 128 M10K blocks / 759,398 bits
+(23%/13%), 33 DSP blocks (29%) -- the synthesis stage alone adds roughly
+344 ALMs, 314 registers, 29 M10K blocks (the 1024-entry-per-channel V
+history plus the 72-entry/2304-value pending queue plus the two
+coefficient ROMs), 4 DSP blocks. Still comfortably within budget, though
+M10K (23%) is now the highest any single stage has pushed the running
+total.
+
+**The decoder's core signal path is now functionally complete**: raw MP3
+bitstream bytes in, genuine correctly-scaled 16-bit PCM samples out, with
+no placeholder or zero-filled content anywhere in the pipeline (long
+blocks, short blocks, mixed blocks, mono, stereo, MS-stereo, and
+intensity-stereo all real, all validated).
+
+## Standalone player shell (step 9) -- loads and plays a file
+
+`MiSTer_MP3.sv` (the top-level `emu` module) plus `rtl/media_file_reader.sv`,
+`rtl/mp3_pcm_pack.sv`, `rtl/audio_pcm_fifo.sv`, and
+`rtl/audio_pcm_output_adapter.sv`. Deliberately minimal, matching the
+scope actually asked for: load a file from the OSD's file browser, decode
+it, play it. No seek, no pause, no playlist/album support -- those are
+real future work, not implemented here.
+
+**Framework reuse, not written from scratch.** `sys/` (hps_io, audio_out,
+the `sys_top.v` wrapper, board/pin configuration) is the standard MiSTer
+core framework, copied wholesale from the sibling MiSTer-Phosphor project
+(same author, same board) rather than hand-authored -- reusing proven,
+working infrastructure for the parts of "a MiSTer core" that have nothing
+to do with MP3 decoding. Three more files are reused the same way,
+verbatim, because they're already-solved, self-contained, genuinely
+generic building blocks with no Phosphor-specific dependencies:
+`media_file_reader.sv` (streams a mounted file's bytes via the standard
+hps_io virtual-SD-card protocol -- mount, then sequential block reads,
+no seek logic needed for this MVP), `audio_pcm_fifo.sv` (a codec-
+independent async FIFO crossing from clk_sys into the audio clock
+domain), and `audio_pcm_output_adapter.sv` (paces FIFO reads at exactly
+44.1kHz or 48kHz against the fixed 24.576MHz CLK_AUDIO via a phase
+accumulator).
+
+**A real, non-obvious integration finding**: Phosphor's copy of
+`sys_top.v` turned out to be far more customized than a first check
+suggested. `hps_io.sv` itself has zero Phosphor-specific content (a spot
+check for a few likely marker strings came back clean), which is what
+made "just copy sys/ wholesale" look safe at first -- but `sys_top.v`
+directly instantiates several Phosphor-specific modules for its own Menu
+music-passthrough and OSD-visualizer features (`media_native_audio`,
+`media_audio_viewport`, `media_audio_visualizers`, `media_player_overlay`,
+plus the small generic `video_config_cdc` synchronizer they all use),
+discovered only when `quartus_map` failed on undefined entities -- a spot
+check of one file isn't a substitute for actually trying to build the
+thing. Resolved per-module based on what each one actually does:
+- `video_config_cdc.sv`: genuinely generic (a 24-line multi-bit CDC
+  synchronizer), reused verbatim.
+- The HDMI-native-audio-clock subsystem (`media_native_audio.sv` and its
+  own real dependencies -- `media_audio_clocks`, `media_hdmi_audio_control`,
+  `media_audio_rate_control`, `hdmi_audio_config`, `hdmi_i2c_owner`,
+  `hdmi_i2c_write_watch`, `i2c_register_master`, `media_pcm_i2s`,
+  `media_pcm_sink`, ~8 small files totaling well under 500 lines): reused
+  verbatim rather than stubbed, after tracing its actual role -- it
+  arbitrates between this core's own audio (always present, fed through
+  as `movie_bclk`/`movie_lrclk`/etc.) and Phosphor's optional Menu-
+  triggered "play background music through any core" feature (`want_cd`).
+  With this core's `PLAYER_MUSIC`/`PLAYER_PCM_*` outputs all tied to their
+  documented "not participating" values (matching the exact tie-off
+  pattern Phosphor's own top-level already uses for a core opting out of
+  this feature), the module's own internal arbitration logic always
+  selects the "movie" (this core's real) path -- i.e. it's a correct,
+  real passthrough for this core's actual usage, not something safe to
+  guess at with a hand-written stub.
+- `media_audio_viewport.sv`, `media_audio_visualizers.sv`,
+  `media_player_overlay.sv`: purely cosmetic OSD/visualizer rendering,
+  with real dependency cascades (visualizers alone pulls in an FFT, a
+  waveform renderer, a fire renderer, an XY scope). This core has no
+  visualizer feature and always drives their control inputs to the
+  "disabled" values, so a hand-written one-cycle-registered (or, for the
+  overlay, zero-latency combinational) passthrough stub is behaviorally
+  identical to the real module for every input this core ever presents --
+  see each stub file's own header comment. Simpler and lower-risk than
+  importing a rendering cascade this core will never use.
+
+**A second real fitter-level finding**: Cyclone V's dedicated clock-select
+hardware requires `CLK_VIDEO` to be driven by a PLL output, not a raw
+input pin -- `quartus_map` failed with "inclk[3] ... must be driven by a
+PLL's output clock" on `sys_top.v`'s video clock-switch blocks when this
+core first tried `CLK_VIDEO = CLK_50M` directly. Not a style preference;
+a real hardware constraint on that specific clock-network resource.
+Resolved by reusing Phosphor's own already-working 4-output PLL wrapper
+(`rtl/pll.v`/`rtl/pll/pll_0002.v`, same board/chip) for `clk_sys` (20MHz)
+and `clk_video` (27MHz) -- the specific rates don't matter for this MVP
+given the decode pipeline's enormous real-time slack, reusing a known-
+good configuration was simply lower-risk than hand-authoring a new PLL
+instantiation.
+
+**Real-hardware frame-admission pacing -- promoted from a testbench
+technique into permanent RTL.** Every simulation testbench in `sim/`
+byte-blasts a whole test file in and relies on an artificial
+"downstream_idle" gate (checking every buffering stage's own `state`/
+`q_count`) to avoid overflowing `mp3_stereo`/`mp3_antialias`/`mp3_imdct`/
+`mp3_synthesis`'s queues, which are all sized assuming realistic bitrate-
+paced input. A real file read from SD/HPS storage has no such inherent
+pacing either -- the whole file could be read in well under a second, and
+without a gate every one of those carefully-sized queues would overflow
+exactly the way the mp3_imdct and mp3_synthesis queues once did in
+simulation before their own depth fixes. So this gate is now real,
+permanent player-shell logic, not just a test convenience: each of the
+four buffering stages gained a clean `output wire idle` port (added
+alongside this player shell, computed from the same internal `state`/
+`q_count` signals the testbenches already reached into via hierarchical
+reference) so the top level can gate new-frame-byte admission on a clean
+interface rather than reaching into module internals. Bytes for the frame
+*currently* being parsed continue to flow in regardless of this gate --
+`mp3_bit_reservoir` already buffers well more than one frame's worth,
+exactly as every simulation testbench already relies on; only the *next*
+frame's bytes wait for the previous one to fully drain.
+
+**Stereo/sample-rate simplification, specific to this player shell, not
+the decoder core.** `mp3_pcm_pack.sv` (packs `mp3_synthesis`'s per-channel
+PCM stream into interleaved L/R pairs for the audio FIFO) latches
+`stereo`/`sample_rate_44k1` once, from the first frame of a newly-loaded
+file, rather than forwarding them per-value through the whole decode
+pipeline the way `window_switching_flag`/`block_type`/`mixed_block_flag`
+are forwarded for antialiasing/IMDCT's benefit. Real encoders don't change
+channel mode or sample rate mid-file, and retrofitting that forwarding
+through four already-validated modules for a case the accepted profile
+doesn't need wasn't worth the risk here. The decoder core itself still
+processes every frame's own real side info correctly regardless; this is
+a player-shell-level simplification, not a decoder correctness change.
+
+**Verification status, updated after real hardware testing.** The user
+built the `.rbf` and tested on an actual MiSTer (DE10-Nano-class board).
+The OSD, file browser, and file mount/load path all worked correctly on
+the first try -- confirmed via an HDMI capture showing the file browser
+navigable and responsive. Audio, however, was badly distorted on the
+first attempt: garbled from the instant playback started, identically on
+every output path tried (analog line-out, S/PDIF, HDMI -- ruling out
+anything specific to one output route), and reproducible every time
+(ruling out a random power-up race). Root-caused and fixed; see the real
+bug below. After the fix, a second hardware test confirmed clean audio:
+peak amplitude matched the validated reference decode to within 2 LSB.
+
+**A real bug found only by testing on hardware -- `audio_pcm_fifo.sv`'s
+depth didn't account for this decoder's own timing profile.** One MP3
+frame decodes to 1,152 PCM samples; `mp3_synthesis` computes that entire
+frame's worth in a tiny fraction of the ~26ms it actually takes to *play*
+at 44.1/48kHz (the same enormous real-time slack documented at every
+stage of this pipeline). `audio_pcm_fifo.sv` (reused from Phosphor, see
+above) was only 256 entries deep -- sized fine for Phosphor's own
+real-time-paced audio sources, but with no backpressure anywhere in this
+codebase's house style (`mp3_synthesis` has no way to be told to pause),
+this MP3 decoder's bursty production overflowed it on essentially every
+single frame. This is the exact same bug *class* already hit twice before
+in this project (`mp3_imdct`'s queue, `mp3_synthesis`'s own pending
+queue) -- a buffer sized for an assumed pacing that didn't hold -- just
+one this project's simulation-only validation couldn't catch, since
+`audio_pcm_fifo.sv` uses an Altera `dcfifo` primitive Icarus can't
+simulate at all; only real hardware exercised the timing that broke it.
+**Widening the FIFO alone would not have been sufficient** -- with no
+backpressure, frames would simply keep piling up faster than real-time
+playback drains them, eventually overflowing any fixed depth. The actual
+fix ties the decode rate to real playback time: `wr_usedw` (an Altera
+dcfifo standard optional port, not previously exposed) reports the FIFO's
+real occupancy back to the player shell's own frame-admission gate
+(already built for the file-reader pacing problem, see above), which now
+also requires enough guaranteed room for a full incoming frame before
+starting to decode the next one. The FIFO was also widened to 2,048
+entries as comfortable margin on top of that real fix, not instead of it.
+
+**A process gap worth naming plainly**: `mp3_pcm_pack.sv` -- new code
+written for this player shell -- was the one module in this entire
+project that was never functionally simulated before hardware testing,
+because it sits directly upstream of the un-simulatable `dcfifo`. Only a
+syntax check (`iverilog -t null`) had been run on it. When garbled audio
+first appeared, a proper testbench (`sim/mp3_pcm_pack_tb.sv`) was written
+and run for the first time *during* that debugging session -- it passed
+cleanly (the module's own logic was correct all along; the bug was
+downstream, in the FIFO sizing/pacing above), but the module should have
+been simulated before ever reaching hardware, matching the discipline
+applied to every other stage in this project. Worth remembering: "this
+part can't be simulated" applies to the specific primitive (`dcfifo`),
+not to everything built around it -- the surrounding logic could and
+should have been tested standalone from the start.
+
+`quartus_map`/`quartus_fit` real numbers for the *complete* board-level
+design on the `5CSEBA6U23I7` (not just the decoder core in isolation --
+includes the full video scaler/OSD/HDMI framework overhead), after the
+FIFO fix: unchanged from the pre-fix numbers to within rounding --
+11,159 ALMs (27%), 14,488 registers, 188 M10K blocks / 1,169,934 bits
+(34%/21%), 66 DSP blocks (59% -- the jump from the decoder-alone 33 is
+standard MiSTer video-scaler overhead, not the MP3 core), 4 PLLs (67%).
+Still comfortably within budget. Timing closure (TimeQuest) has not been
+run; given the decode pipeline's enormous documented real-time slack at
+every stage, and that real hardware now plays a full test file cleanly
+end to end, this is expected to be low-risk future work, not a blocker.
+
 ## Undefined-behavior conditions (informational only, never checked)
 
 Listed here so anyone reusing this decoder in another project knows the

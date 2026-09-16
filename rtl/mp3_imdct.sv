@@ -54,12 +54,16 @@ module mp3_imdct (
     input wire value_mbf,
 
     // Time-major, subband-minor: out_index = t*32 + sb (t=0..17, sb=0..31),
-    // matching the layout the polyphase synthesis filterbank (not yet
-    // built) needs.
+    // matching the layout the polyphase synthesis filterbank (mp3_synthesis.sv)
+    // needs.
     output reg out_valid,
     output reg [1:0] out_gci,
     output reg [9:0] out_index,
-    output reg signed [31:0] out_data
+    output reg signed [31:0] out_data,
+
+    // True when nothing is in progress or queued -- see mp3_stereo.sv's
+    // header comment on this same port for the real-hardware pacing need.
+    output wire idle
 );
 
 // -- Combined IMDCT+window coefficient ROM -------------------------------
@@ -199,6 +203,7 @@ localparam
     S_STREAM_READ   = 8, S_STREAM_EMIT = 9;
 
 reg [3:0] state;
+assign idle = (state == 4'd0) && (q_count == 3'd0);
 reg [5:0] sb;           // 0..31, current subband
 reg [5:0] out_i;        // 0..35, current IMDCT output tap within this subband
 reg [4:0] k;            // 0..17, MAC inner-loop index

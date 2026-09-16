@@ -1,0 +1,62 @@
+# PLL: Cyclone V's clock-select hardware requires CLK_VIDEO to come from a
+# PLL output, not a raw input pin (a fitter constraint, discovered via a
+# real quartus_map error on sys_top.v's video clock-switch blocks) -- reused
+# verbatim from the sibling MiSTer-Phosphor project's own generated PLL
+# wrapper (same board/chip, an already-working 4-output configuration; this
+# core only uses two of the four outputs, for clk_sys and clk_video).
+set_global_assignment -name VERILOG_FILE rtl/pll.v
+set_global_assignment -name VERILOG_FILE rtl/pll/pll_0002.v
+
+# MP3 decoder core (validated stage by stage in sim/ -- see docs/MP3.md)
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_frame_parser.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_bit_reservoir.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_huffman_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_dequant.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_stereo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_antialias.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_imdct.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_synthesis.sv
+
+set_global_assignment -name HEX_FILE rtl/mp3_huffman_nodes.hex
+set_global_assignment -name HEX_FILE rtl/mp3_huffman_roots.hex
+set_global_assignment -name HEX_FILE rtl/mp3_band_index_long.hex
+set_global_assignment -name HEX_FILE rtl/mp3_dequant_band_size_long.hex
+set_global_assignment -name HEX_FILE rtl/mp3_dequant_band_size_short.hex
+set_global_assignment -name HEX_FILE rtl/mp3_dequant_frac_exp.hex
+set_global_assignment -name HEX_FILE rtl/mp3_dequant_mag43.hex
+set_global_assignment -name HEX_FILE rtl/mp3_dequant_pretab.hex
+set_global_assignment -name HEX_FILE rtl/mp3_imdct_coeff.hex
+set_global_assignment -name HEX_FILE rtl/mp3_synthesis_matrix.hex
+set_global_assignment -name HEX_FILE rtl/mp3_synthesis_window.hex
+
+# Player shell: file loading, PCM packing, audio clock-domain crossing
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_file_reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_pcm_pack.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_output_adapter.sv
+
+# sys/sys_top.v (copied from the sibling MiSTer-Phosphor project along with
+# the rest of sys/ -- see MiSTer_MP3.sv's header comment) directly
+# instantiates a handful of Phosphor-specific modules for its own Menu
+# music-passthrough and OSD-visualizer features. This standalone core
+# doesn't participate in either, but still needs *something* satisfying
+# those module names to compile: video_config_cdc.sv and the HDMI-native-
+# audio-clock subsystem (rtl/platform/) are genuinely generic, reused
+# as-is; the three purely-cosmetic OSD/visualizer modules are replaced
+# with minimal passthrough stubs (see each file's own header comment).
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_config_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pcm_i2s.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pcm_sink.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/i2c_register_master.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/hdmi_i2c_owner.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/hdmi_i2c_write_watch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/hdmi_audio_config.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_audio_clocks.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_audio_rate_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_hdmi_audio_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_native_audio.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_viewport.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_visualizers.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_player_overlay.sv
+
+set_global_assignment -name SYSTEMVERILOG_FILE MiSTer_MP3.sv
