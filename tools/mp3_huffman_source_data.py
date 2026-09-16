@@ -257,3 +257,9 @@ BAND_SIZE_SHORT = {
     44100: [4, 4, 4, 4, 6, 8, 10, 12, 14, 18, 22, 30, 56],
     48000: [4, 4, 4, 4, 6, 6, 10, 12, 14, 16, 20, 26, 66],
 }
+
+# ff_mpa_pretab[preflag]: per-long-band preemphasis addend (mpegaudiodec_common.c).
+PRETAB = {
+    0: [0] * 22,
+    1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 3, 2, 0],
+}

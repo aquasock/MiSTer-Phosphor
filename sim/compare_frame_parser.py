@@ -93,6 +93,13 @@ def compare(mp3_path: str, num_frames: int) -> int:
             }
             for rk, sk in field_map.items():
                 rv, sv = rg[rk], sg.get(sk)
+                if rk == "global_gain" and r["mode_extension"] == 2:
+                    # MS-stereo-only folds a 1/sqrt(2) renormalization into
+                    # global_gain at parse time (mp3_frame_parser.sv's F_GG
+                    # state) -- mp3_header_reference.py deliberately stays a
+                    # raw/uncorrected parser (see its module docstring), so
+                    # the correction is applied here for comparison instead.
+                    rv = (rv - 2) & 0xFF
                 if rv != sv:
                     print(f"frame {i} gci={gci}: {sk} mismatch ref={rv} sim={sv}")
                     mismatches += 1

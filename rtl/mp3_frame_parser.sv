@@ -210,7 +210,19 @@ always @(posedge clk) begin
 
         F_P23: begin part2_3_length[gci] <= bits_value[11:0]; get_bits(5'd9, F_BV); end
         F_BV:  begin big_values[gci] <= bits_value[8:0]; get_bits(5'd8, F_GG); end
-        F_GG:  begin global_gain[gci] <= bits_value[7:0]; get_bits(5'd4, F_SC); end
+        // MS-stereo-only (mode_extension exactly 2'd2, i.e. MS_STEREO bit
+        // set and INTENSITY_STEREO bit clear -- combined MS+intensity does
+        // NOT get this) folds a 1/sqrt(2) renormalization directly into
+        // global_gain here, at parse time, matching FFmpeg's own
+        // side-info-parsing-time adjustment (mpegaudiodec_template.c) rather
+        // than a separate multiply later: -2 in the exponent's units is
+        // exactly 2^(-2/4) = 1/sqrt(2). Every later stage (dequant already
+        // written and validated) just consumes global_gain as given, so
+        // this is the only place this correction needs to exist.
+        F_GG:  begin
+            global_gain[gci] <= bits_value[7:0] - (mode_extension == 2'd2 ? 8'd2 : 8'd0);
+            get_bits(5'd4, F_SC);
+        end
         F_SC:  begin scalefac_compress[gci] <= bits_value[3:0]; get_bits(5'd1, F_WSF); end
         F_WSF: begin
             window_switching_flag[gci] <= bits_value[0];
