@@ -90,3 +90,37 @@ the license carried in the project's own source headers. Built on the
 standard MiSTer platform framework (scaler, on-screen menu, platform
 top-level wrapper) alongside this project's own playback/decode logic;
 platform-provided components retain their own upstream licensing.
+
+## Screenshots
+
+<img width="1920" height="1080" alt="menu" src="https://github.com/user-attachments/assets/b6df0f47-79ab-48a0-ad97-20b447a1dd00" />
+
+<img width="1920" height="1080" alt="static" src="https://github.com/user-attachments/assets/0009241c-e270-45b5-b348-db9a55c1d717" />
+
+<img width="1920" height="1080" alt="motion" src="https://github.com/user-attachments/assets/eec4e23c-e21e-429c-82c6-b4ee51714a9f" />
+
+<img width="1920" height="1080" alt="waveform" src="https://github.com/user-attachments/assets/f5f7a19d-b7f4-4d4e-99e9-edc9d59ebae3" />
+
+<img width="1920" height="1080" alt="fft" src="https://github.com/user-attachments/assets/c6d45783-a5fa-4b2a-9f1e-53870e2c468e" />
+
+<img width="1920" height="1080" alt="o-scope" src="https://github.com/user-attachments/assets/e84b4d29-6889-4a12-a8ab-138f2a3235c9" />
+
+<img width="1920" height="1080" alt="o-scope cali" src="https://github.com/user-attachments/assets/22d84606-d87c-4a4e-a764-3fb5be39fff0" />
+
+<img width="1920" height="1080" alt="o-scope music 1" src="https://github.com/user-attachments/assets/4bdbe9f6-3a03-4271-bc6c-bcb9853a4fcd" />
+
+<img width="1920" height="1080" alt="o-scope music 2" src="https://github.com/user-attachments/assets/4a9c0585-fbbe-468f-8fe2-0daa74b1807e" />
+
+<img width="1920" height="1080" alt="o-scope music 3" src="https://github.com/user-attachments/assets/92d672a3-989d-47c4-a4a4-004e1b7a82cb" />
+
+<img width="1920" height="1080" alt="o-scope music 4" src="https://github.com/user-attachments/assets/75bdecee-df2a-47aa-9d7c-329dd79ee06d" />
+
+
+
+
+
+
+
+
+
+
