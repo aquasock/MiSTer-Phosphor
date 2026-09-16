@@ -1,0 +1,22 @@
+test_vectors/
+*.pcm
+__pycache__/
+*.pyc
+
+# Quartus build output
+output_files/
+db/
+incremental_db/
+greybox_tmp/
+*.qws
+*.rpt
+*.summary
+*.smsg
+*.done
+*.sof
+*.pof
+*.rbf
+*.jdi
+*.pin
+*.sld
+*.qarlog
