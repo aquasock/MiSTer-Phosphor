@@ -197,7 +197,7 @@ module flac_album_control(
  media_ui_divider seek_time(.clk(clk),.ce(1'b1),.start(convert_start),
   .numerator({13'd0,requested_time}*48'd49),.denominator(35'd400),
   .busy(convert_busy),.done(convert_done),.quotient(converted_sample),.remainder());
- reg key_toggle=0,n_down=0,p_down=0,forward=0;
+ reg key_toggle=0,n_down=0,p_down=0,forward=0,wrap_previous=0;
  reg [35:0] request_position=0,last_start=0,previous_start=0;
  reg [35:0] best_sample=0;
  reg [40:0] best_offset=0;
@@ -210,15 +210,20 @@ module flac_album_control(
   end
   if(reset||new_file)begin
    busy<=0;resume_frame<=0;start_offset<=0;start_sample<=0;target_sample<=0;tag<=reset?8'd0:tag+1'b1;nav_state<=IDLE;
-   track_address<=0;seek_address<=0;forward<=0;request_position<=0;last_start<=0;previous_start<=0;best_sample<=0;best_offset<=0;
+   track_address<=0;seek_address<=0;forward<=0;wrap_previous<=0;request_position<=0;last_start<=0;previous_start<=0;best_sample<=0;best_offset<=0;
    if(reset)begin n_down<=0;p_down<=0;end
   end else case(nav_state)
    IDLE:if(seek_request&&enabled&&seek_available)begin
     busy<=1;requested_time<=seek_target_q;nav_state<=CONVERT_START;
    end else if(key_toggle!=key[10]&&key[9]&&available&&enabled&&!osd_open&&
        ((key[8:0]==9'h031&&!n_down)||(key[8:0]==9'h04d&&!p_down)))begin
-    forward<=key[8:0]==9'h031;request_position<=position;track_address<=0;
-    last_start<=0;previous_start<=0;busy<=1;nav_state<=TRACK_WAIT;
+    forward<=key[8:0]==9'h031;wrap_previous<=0;request_position<=position;
+    last_start<=0;previous_start<=0;busy<=1;
+    if(key[8:0]==9'h031 && current_track_valid && current_track_number==track_count)begin
+     target_sample<=0;track_address<=0;nav_state<=CHOOSE;
+    end else if(key[8:0]==9'h04d && current_track_valid && current_track_number==1)begin
+     track_address<=track_count-1'b1;wrap_previous<=1;nav_state<=TRACK_WAIT;
+    end else begin track_address<=0;nav_state<=TRACK_WAIT;end
    end
    CONVERT_START:if(!convert_busy)begin convert_start<=1;nav_state<=CONVERT;end
    CONVERT:if(convert_done)begin
@@ -227,10 +232,11 @@ module flac_album_control(
    end
    TRACK_WAIT:nav_state<=TRACK_READ;
    TRACK_READ:begin
-    if(track_q>request_position)begin
+    if(wrap_previous)begin target_sample<=track_q;wrap_previous<=0;nav_state<=CHOOSE;end
+    else if(track_q>request_position)begin
      target_sample<=(forward||track_address==0)?track_q:previous_start;nav_state<=CHOOSE;
     end else if(track_address+1'b1==track_count)begin
-     if(forward)begin busy<=0;nav_state<=IDLE;end
+     if(forward)begin target_sample<=0;nav_state<=CHOOSE;end
      else begin target_sample<=track_address==0?track_q:last_start;nav_state<=CHOOSE;end
     end else begin
      previous_start<=track_address==0?track_q:last_start;last_start<=track_q;track_address<=track_address+1'b1;nav_state<=TRACK_WAIT;

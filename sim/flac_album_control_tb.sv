@@ -3,6 +3,8 @@
 module flac_album_control_tb;
 parameter HEX_FILE = "/tmp/flac_album.hex";
 parameter integer FILE_BYTES = 1;
+parameter integer EXPECT_TOTAL_SAMPLES = 88200;
+parameter integer EXPECT_TRACK2_SAMPLE = 44100;
 
 reg clk = 0;
 always #5 clk = ~clk;
@@ -68,7 +70,7 @@ initial begin
  reset <= 0; new_file <= 1;
  @(negedge clk); new_file <= 0;
  wait (available && seek_available);
- if (total_samples != 88200 || min_block != 4096 || max_block != 4096) begin
+ if (total_samples != EXPECT_TOTAL_SAMPLES || min_block != 4096 || max_block != 4096) begin
   $display("FAIL metadata total=%0d min=%0d max=%0d", total_samples,min_block,max_block);
   $finish_and_return(1);
  end
@@ -79,18 +81,38 @@ initial begin
  end
  key_event(1'b1,9'h031); // N: next track
  wait (restart);
- if (!resume_frame || target_sample != 44100 || start_sample > target_sample || start_offset == 0) begin
+ if (!resume_frame || target_sample != EXPECT_TRACK2_SAMPLE || start_sample > target_sample || start_offset == 0) begin
   $display("FAIL next target=%0d start=%0d offset=%0d resume=%0d",target_sample,start_sample,start_offset,resume_frame);
   $finish_and_return(1);
  end
  finish_seek();
  key_event(1'b0,9'h031);
- position <= 44100;
+ position <= EXPECT_TRACK2_SAMPLE;
  repeat (8) @(negedge clk);
  key_event(1'b1,9'h04d); // P: previous track
  wait (restart);
  if (target_sample != 0 || start_sample != 0) begin
   $display("FAIL previous target=%0d start=%0d",target_sample,start_sample);
+  $finish_and_return(1);
+ end
+ finish_seek();
+ key_event(1'b0,9'h04d);
+ position <= 0;
+ repeat (8) @(negedge clk);
+ key_event(1'b1,9'h04d); // P on first track wraps to final track
+ wait (restart);
+ if (target_sample != EXPECT_TRACK2_SAMPLE) begin
+  $display("FAIL previous wrap target=%0d",target_sample);
+  $finish_and_return(1);
+ end
+ finish_seek();
+ key_event(1'b0,9'h04d);
+ position <= EXPECT_TRACK2_SAMPLE;
+ repeat (8) @(negedge clk);
+ key_event(1'b1,9'h031); // N on final track wraps to first track
+ wait (restart);
+ if (target_sample != 0) begin
+  $display("FAIL next wrap target=%0d",target_sample);
   $finish_and_return(1);
  end
  $display("PASS total=%0d next_offset=%0d",total_samples,start_offset);

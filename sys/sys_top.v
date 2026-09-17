@@ -1209,7 +1209,7 @@ cyclonev_hps_interface_peripheral_i2c hdmi_i2c
 	`endif
 
 	wire [23:0] hdmi_data_mask;
-	wire        hdmi_de_mask, hdmi_vs_mask, hdmi_hs_mask;
+	wire        hdmi_de_mask, hdmi_vs_mask, hdmi_hs_mask, hdmi_brd_mask;
 
 	reg [15:0] shadowmask_data;
 	reg        shadowmask_wr = 0;
@@ -1232,7 +1232,8 @@ cyclonev_hps_interface_peripheral_i2c hdmi_i2c
 		.dout(hdmi_data_mask),
 		.hs_out(hdmi_hs_mask),
 		.vs_out(hdmi_vs_mask),
-		.de_out(hdmi_de_mask)
+		.de_out(hdmi_de_mask),
+		.brd_out(hdmi_brd_mask)
 	);
 
 	wire [23:0] hdmi_data_osd;
@@ -1246,7 +1247,7 @@ cyclonev_hps_interface_peripheral_i2c hdmi_i2c
 	media_player_overlay player_overlay(
 	 .control_clk(player_ui_clock),.video_clk(clk_hdmi),.control_state(player_ui_state),
 	 .subtitle_command(player_subtitle_command),.subtitle_ack(player_subtitle_ack),
-	 .rgb(hdmi_data_mask),.hs(hdmi_hs_mask),.vs(hdmi_vs_mask),.de(hdmi_de_mask),.layout_de(hdmi_de_mask),
+	 .rgb(hdmi_data_mask),.hs(hdmi_hs_mask),.vs(hdmi_vs_mask),.de(hdmi_de_mask),.layout_de(hdmi_de_mask&&!hdmi_brd_mask),
 	 .rgb_out(hdmi_data_player),.hs_out(hdmi_hs_player),.vs_out(hdmi_vs_player),.de_out(hdmi_de_player));
 
 	osd hdmi_osd

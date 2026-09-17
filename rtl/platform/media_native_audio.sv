@@ -73,7 +73,11 @@ module media_native_audio(
  always @(posedge cd_clock or posedge fifo_reset)if(fifo_reset)rd_reset_sync<=7;else rd_reset_sync<={rd_reset_sync[1:0],1'b0};
  wire fifo_full,fifo_empty,sink_ready;wire[32:0] fifo_q;
  assign pcm_ready=!fifo_full&&!wr_reset_sync[2]&&!fifo_reset;
- dcfifo #(.lpm_numwords(256),.lpm_showahead("ON"),.lpm_type("dcfifo"),.lpm_width(33),.lpm_widthu(8),
+ // Keep enough decoded audio queued to hide an indexed FLAC's file-reader and
+ // decoder restart at track 1.  4,096 entries retain 92.9 ms at 44.1 kHz;
+ // the loop control preserves this queue instead of resetting and prefilling
+ // it as manual navigation does.
+ dcfifo #(.lpm_numwords(4096),.lpm_showahead("ON"),.lpm_type("dcfifo"),.lpm_width(33),.lpm_widthu(12),
   .overflow_checking("ON"),.underflow_checking("ON"),.use_eab("ON"),.rdsync_delaypipe(4),.wrsync_delaypipe(4),
   .write_aclr_synch("ON"),.read_aclr_synch("ON")) pcm_fifo(
   .aclr(fifo_reset),.data(pcm_data),.wrclk(wr_clk),.wrreq(pcm_valid&&pcm_ready),.wrfull(fifo_full),

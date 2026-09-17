@@ -231,8 +231,22 @@ remains the existing passthrough stub for its later, separate stage.
 Full Quartus map/fit/asm completed with zero errors and all timing checks
 positive. The core raster uses a 25.2 MHz pixel clock with 800x525 totals,
 giving exactly 60 Hz so ASCAL does not introduce a 15:14 frame-drop cadence.
-The pre-split visualizer build uses 15,952 ALMs, 226 M10Ks, and 77 DSPs.
-Worst-case setup slack is +0.464 ns and hold slack is +0.245 ns.
+The O-Scope path uses a 256-entry asynchronous stereo FIFO instead of a
+coalescing latest-sample mailbox. The line renderer explicitly accepts each
+FIFO head, preserving intermediate points during long draws without ever
+backpressuring audio. The FIFO is flushed while XY mode is not selected so
+mode changes begin at the live audio position.
+
+Before entering that FIFO, XY samples now pass through a time-multiplexed
+15-tap half-band reconstruction filter. It emits an exact delayed source
+sample and a properly filtered midpoint for every input, giving the O-Scope
+an 88.2 kHz plotting stream for 44.1 kHz media. One multiplier is shared
+between both stereo channels; waveform and FFT paths remain at native rate.
+
+The resulting build uses 16,161 ALMs, 227 M10Ks, and 78 DSPs. Worst-case
+setup slack is +0.787 ns and hold slack is +0.248 ns. The focused interpolator
+testbench verifies that every input produces two ordered outputs and that
+steady-state gain is unity in both channels.
 
 ### A real bug found on hardware: FLAC never appeared in the file browser
 
@@ -1221,8 +1235,18 @@ intensity-stereo all real, all validated).
 `rtl/mp3_pcm_pack.sv`, `rtl/audio_pcm_fifo.sv`, and
 `rtl/audio_pcm_output_adapter.sv`. Deliberately minimal, matching the
 scope originally asked for: load a file from the OSD's file browser, decode
-it, and play it. Embedded-CUESHEET FLAC next/previous-track navigation has
-since been added; general seek, pause, and playlists remain out of scope.
+it, and play it. Embedded-CUESHEET FLAC albums now also use Phosphor's
+transport controls and status bar: Space toggles play/pause, Left/Right seek
+10 seconds, Ctrl+Left/Right seek 30 seconds, Ctrl+Alt+Left/Right seek 60
+seconds, and F1-F8 jump to eighths of the current CUE track. N/P retain their
+existing previous/next-track behavior. These controls are intentionally
+limited to indexed FLAC albums for this first UI integration; playlists and
+general MP3/WAV transport remain out of scope.
+
+Natural CUE transitions and N/P navigation present the six-second status
+sequence as album time first and current-track time second. Indexed FLAC
+albums automatically seek back to sample zero after the final EOF token, so
+the last track repeats into track one without requiring user input.
 
 **Framework reuse, not written from scratch.** `sys/` (hps_io, audio_out,
 the `sys_top.v` wrapper, board/pin configuration) is the standard MiSTer

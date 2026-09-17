@@ -17,7 +17,7 @@ undefined behavior, not a graceful error.
 | Channels | mono or stereo | stereo only | stereo only |
 | Bitrate modes | CBR/VBR/ABR, all 14 standard bitrates | n/a (uncompressed) | n/a (lossless, arbitrary block sizes) |
 | Stream validation | Structural sync/bitrate/sample-rate check for frame resync only (tolerates ID3v2 tags with embedded cover art); no CRC check | None — `fmt`/`data` chunks parsed structurally, fields never validated | Requires literal `fLaC` magic at byte 0; no resync/decoy tolerance |
-| Album/track navigation | n/a | n/a | **Not yet implemented** (CUESHEET-based nav is a deferred, separate stage) |
+| Album/track navigation | n/a | n/a | Embedded CUESHEET: previous/next track, seek, pause/resume, and album repeat |
 | Audio output path | Multi-rate FIFO path (`mp3_pcm_pack`→`audio_pcm_fifo`→`audio_pcm_output_adapter`), no backpressure | Fixed-44.1kHz native-audio rail (`PLAYER_PCM_*`), real backpressure | Same native-audio rail as WAV, via `flac_pcm_landing` |
 | External DDR use | None | None | Yes — `flac_frame_store` double-buffers decoded frames in DDR (only DDR client in this core) |
 
@@ -25,7 +25,23 @@ undefined behavior, not a graceful error.
 (8–24 kHz MP3), dual-channel MP3 mode, free-format MP3 bitstreams, any
 sample rate other than the table above, any bit depth other than 16-bit,
 mono/multichannel WAV or FLAC, compressed WAV (ADPCM etc.), seek/pause/
-playlist beyond load-and-play (FLAC album nav pending).
+playlist beyond load-and-play for MP3/WAV.
+
+## Build a FLAC album in Chrome
+
+Open [`tools/flac_album_builder/index.html`](tools/flac_album_builder/index.html)
+in a current desktop Chrome-compatible browser. Add 44.1 kHz, 16-bit stereo
+FLAC tracks, arrange their order, and download one MiSTer_MP3-compatible FLAC
+with embedded CUESHEET and SEEKTABLE metadata. Processing remains local to the
+browser; the files are not uploaded.
+
+See [`tools/flac_album_builder/README.md`](tools/flac_album_builder/README.md)
+for input constraints and the exported-file validator.
+
+To reverse the process, open
+[`tools/flac_album_splitter/index.html`](tools/flac_album_splitter/index.html).
+It reads the embedded CUESHEET and produces individually downloadable FLAC
+tracks plus a single ZIP containing all tracks.
 
 ## Resource usage (Cyclone V 5CSEBA6U23I7, full board-level design)
 

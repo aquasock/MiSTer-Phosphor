@@ -57,6 +57,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_hdmi_audio_con
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_native_audio.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_viewport.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_visualizers.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_xy_interpolator.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_waveform_visualizer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_fft.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_fire_renderer.sv
@@ -65,6 +66,16 @@ set_global_assignment -name HEX_FILE rtl/media_fft_window.hex
 set_global_assignment -name HEX_FILE rtl/media_fft_twiddle.hex
 set_global_assignment -name HEX_FILE rtl/media_fft_band_end.hex
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_player_overlay.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_keyboard_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/media_music_time.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ui_state.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ui_scene.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_overlay_compositor.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_subtitle_cdc.sv
+set_global_assignment -name MISC_FILE rtl/media_overlay_font.mem
+set_global_assignment -name MISC_FILE rtl/media_overlay_coordinates.mem
+set_global_assignment -name HEX_FILE rtl/media_overlay_blend_rg.hex
+set_global_assignment -name HEX_FILE rtl/media_overlay_blend_b.hex
 
 # WAV: fixed 44.1kHz/16-bit/stereo profile, RIFF chunk-walk + raw PCM
 # passthrough (see docs/MP3.md) -- first step of unifying MP3/FLAC/WAV

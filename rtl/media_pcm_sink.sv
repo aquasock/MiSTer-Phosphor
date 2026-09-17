@@ -39,9 +39,11 @@ module media_pcm_sink (
     end
    end else begin
     held_left<=0;held_right<=0;have_sample<=0;
-    // Permit initial prefill; after the first sample, starvation is a
-    // functional playback failure, not an invisible inserted silence sample.
-    if(started)begin active<=0;error<=1;end
+    // A producer gap is reported, but it must not permanently deadlock the
+    // stream. Keep the sink active so input_ready can accept later PCM and
+    // playback can recover without requiring a decoder/FIFO restart. Silence
+    // occupies the missing interval and position pauses until real PCM resumes.
+    if(started)error<=1;
    end
   end
  end

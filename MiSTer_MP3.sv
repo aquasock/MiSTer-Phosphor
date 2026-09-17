@@ -1,8 +1,9 @@
 // Standalone MiSTer player shell for the from-scratch MP3 decoder built in
 // rtl/. Step 9 of the project roadmap (docs/MP3.md) -- minimal on purpose:
-// load a file from the OSD's file browser, decode it, play it. No seek, no
-// pause, no album/playlist support, no video content beyond the blanked
-// signal needed to host the OSD itself (this core has no picture).
+// load a file from the OSD's file browser, decode it, and play it. Embedded
+// FLAC CUESHEET albums additionally have pause, seek, track navigation, and
+// the Phosphor transport status bar. There is no playlist support or video
+// content beyond the raster used by the visualizers and OSD.
 //
 // Framework: sys/ here is the standard MiSTer core framework (hps_io,
 // audio_out, sd_card, the sys_top.v wrapper, board/pin configuration via
@@ -78,9 +79,6 @@ assign OSD_HIDE_MESSAGE = 0;
 // WAV/FLAC playback -- see the format-dispatch section below and
 // docs/MP3.md. Driven for real further down; only the still-genuinely-
 // unused ones stay tied off here.
-assign PLAYER_MUSIC_PAUSED = 0;
-assign PLAYER_UI_CLOCK = clk_sys;
-assign PLAYER_UI_STATE = 0;
 assign PLAYER_SUBTITLE_COMMAND = 0;
 
 assign LED_USER  = sd_busy;
@@ -88,8 +86,11 @@ assign LED_DISK  = 2'b00;
 assign LED_POWER = 2'b00;
 assign BUTTONS   = 0;
 
-assign VIDEO_ARX = 13'd4;
-assign VIDEO_ARY = 13'd3;
+// Aspect selection controls HDMI's scaler viewport only. The native core
+// raster remains 640x480 in both modes, so direct analog output keeps valid
+// 480p timing while Widescreen intentionally stretches that raster to 16:9.
+assign VIDEO_ARX = status[121] ? 13'd16 : 13'd4;
+assign VIDEO_ARY = status[121] ? 13'd9  : 13'd3;
 
 ///////// Clock / reset /////////
 // Cyclone V's dedicated clock-select hardware requires CLK_VIDEO to be
@@ -121,6 +122,7 @@ localparam CONF_STR = {
 	// already uses ("MPGFL*" = "MPG" + "FL*") for this identical problem.
 	"S0,MP3WAVFL*,Load Audio;",
 	"O[123:122],Visualizer,Waveforms,FFT,O-Scope;",
+	"O[121],Aspect ratio,Standard,Widescreen;",
 	"-;",
 	"T1,Reset;",
 	"R1,Reset and close OSD;",
@@ -204,6 +206,21 @@ wire [40:0] album_offset;
 wire [35:0] album_start, album_target, album_total;
 wire [15:0] album_min, album_max;
 wire album_landed, flac_quiescent;
+wire album_track_valid, album_track_changed;
+wire [6:0] album_track_number;
+wire [35:0] album_track_start, album_track_end;
+
+// Phosphor's transport controls use 360,000 fixed-point ticks per second.
+// Keep both the album timeline and the current CUE track timeline available:
+// arrows operate on the continuous album position, while F1-F8 use the
+// current track duration/origin and the status bar can present track time.
+wire [34:0] music_elapsed_q, music_duration_q;
+wire [34:0] track_elapsed_q, track_duration_q, track_origin_q;
+wire track_times_valid;
+wire transport_paused, transport_seeking, transport_restart;
+wire [34:0] transport_target_q;
+wire album_duration_known;
+wire transport_loaded;
 
 reg [63:0] file_size_q, reader_start_offset;
 reg reader_start, reader_cancel, switch_pending;
@@ -683,6 +700,35 @@ assign DDRAM_WE = flac_mem_write;
 wire flac_landing_ready;
 wire flac_landing_valid, flac_landing_eof;
 wire [31:0] flac_landing_pcm;
+reg album_loop_pending = 1'b0;
+reg album_loop_restarted = 1'b0;
+
+// A seek restarts the decoder while the native 44.1 kHz sink is already
+// clocked and ready.  Releasing an empty FIFO immediately can let the sink
+// consume the decoder's first small burst and underrun before the next FLAC
+// frame is CRC-admitted from DDR. Hold only the consumer paused while 224
+// samples collect in its 256-entry FIFO. Decoding and FIFO writes continue
+// while paused, so this adds about 5.1 ms of restart latency without changing
+// PCM data and leaves 32 entries of headroom for the clock-domain crossing.
+reg flac_prefilling = 1'b1;
+reg [7:0] flac_prefill_count = 8'd0;
+always @(posedge clk_sys) begin
+	if (decoder_reset || !flac_active) begin
+		flac_prefilling <= 1'b1;
+		flac_prefill_count <= 8'd0;
+	end else if (flac_restarting || album_restart) begin
+		// A seamless album wrap retains the already-buffered tail and lets it
+		// cover decoder restart. Manual navigation resets the FIFO and needs a
+		// fresh prefill before the consumer is released.
+		flac_prefilling <= !album_loop_pending;
+		flac_prefill_count <= 8'd0;
+	end else if (flac_prefilling && flac_landing_valid && PLAYER_PCM_READY) begin
+		if (flac_landing_eof || flac_prefill_count == 8'd223)
+			flac_prefilling <= 1'b0;
+		else
+			flac_prefill_count <= flac_prefill_count + 1'b1;
+	end
+end
 
 flac_pcm_landing flac_landing
 (
@@ -694,17 +740,104 @@ flac_pcm_landing flac_landing
 );
 
 wire [35:0] native_music_position;
-video_config_cdc #(.WIDTH(36)) album_position_cdc
+wire native_music_finished, native_music_error;
+video_config_cdc #(.WIDTH(38)) album_position_cdc
 (
 	.src_clk(CLK_AUDIO_CD), .dst_clk(clk_sys),
-	.src_data(PLAYER_MUSIC_POSITION), .dst_data(native_music_position)
+	.src_data({PLAYER_MUSIC_FINISHED, PLAYER_MUSIC_ERROR, PLAYER_MUSIC_POSITION}),
+	.dst_data({native_music_finished, native_music_error, native_music_position})
 );
 wire [36:0] album_absolute_position = {1'b0, album_target} + {1'b0, native_music_position};
-wire [35:0] album_position = album_absolute_position[36] ? {36{1'b1}} : album_absolute_position[35:0];
+reg [35:0] album_position_bias = 0;
+wire [36:0] album_biased_position = album_absolute_position - {1'b0,album_position_bias};
+wire [35:0] album_position = album_biased_position[36] ? {36{1'b1}} : album_biased_position[35:0];
+// A seamless wrap deliberately does not reset the native PCM sink, so its
+// sample counter remains monotonic. Fold each completed album out of the
+// displayed/navigation position exactly when the buffered output reaches it.
+always @(posedge clk_sys) begin
+	if (decoder_reset || (flac_restarting && !album_loop_pending))
+		album_position_bias <= 0;
+	else if (album_total != 0 && album_biased_position >= {1'b0,album_total})
+		album_position_bias <= album_position_bias + album_total;
+end
 
 (* preserve, altera_attribute="-name AUTO_SHIFT_REGISTER_RECOGNITION OFF; -name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 reg [2:0] album_osd_sync = 0;
 always @(posedge clk_sys) album_osd_sync <= {album_osd_sync[1:0], OSD_STATUS};
+
+media_music_time music_time
+(
+	.clk(clk_sys), .reset(reset || new_file),
+	.track_changed(album_track_changed), .track_start(album_track_start),
+	.position(album_position), .total(album_total),
+	.track_position(album_position >= album_track_start ? album_position - album_track_start : 36'd0),
+	.track_total(album_track_end >= album_track_start ? album_track_end - album_track_start : 36'd0),
+	.elapsed_q(music_elapsed_q), .total_q(music_duration_q),
+	.track_elapsed_q(track_elapsed_q), .track_total_q(track_duration_q),
+	.track_start_q(track_origin_q), .track_times_valid(track_times_valid)
+);
+
+assign transport_loaded = flac_active && album_available && album_seek_available;
+
+// For an indexed album, consume EOF on the producer side and restart before
+// the buffered tail reaches the audio sink. The FIFO is preserved during this
+// special restart, allowing track 1 to queue directly behind the final sample.
+wire album_source_eof = transport_loaded && flac_landing_valid &&
+	flac_landing_eof && PLAYER_PCM_READY;
+always @(posedge clk_sys) begin
+ if (decoder_reset || !transport_loaded) begin
+  album_loop_pending <= 1'b0;
+  album_loop_restarted <= 1'b0;
+ end else if (album_source_eof && !album_busy && !transport_seeking) begin
+  album_loop_pending <= 1'b1;
+  album_loop_restarted <= 1'b0;
+ end else begin
+  // `landed` is still high from the original decode when EOF requests the
+  // loop. Do not mistake that stale level for landing at sample zero: wait
+  // until the loop restart has actually reset the landing stage and begun.
+  if (album_loop_pending && album_restart)
+   album_loop_restarted <= 1'b1;
+  if (album_loop_pending && album_loop_restarted && album_landed) begin
+  album_loop_pending <= 1'b0;
+   album_loop_restarted <= 1'b0;
+  end
+ end
+end
+wire album_loop_request = album_source_eof && !album_loop_pending &&
+	!album_busy && !transport_seeking;
+wire album_seek_request = transport_restart || album_loop_request;
+wire [34:0] album_seek_target_q = album_loop_request ? 35'd0 : transport_target_q;
+
+media_keyboard_control #(.RESTART_BOTH_DIRECTIONS(1), .ENABLE_SEEK_GATE(1)) transport_keys
+(
+	.clk(clk_sys), .reset(reset), .new_file(new_file),
+	.enabled(transport_loaded), .seek_enabled(album_seek_available && !album_busy),
+	.osd_open(album_osd_sync[2]), .key(ps2_key),
+	.elapsed_q(music_elapsed_q), .duration_q(track_duration_q),
+	.seek_origin_q(track_origin_q),
+	.duration_valid(album_track_valid && track_times_valid),
+	.seek_done(transport_seeking && album_landed && !album_busy),
+	.restart_complete(reader_start),
+	.paused(transport_paused), .seek_active(transport_seeking),
+	.seek_target_q(transport_target_q), .restart(transport_restart)
+);
+
+assign PLAYER_UI_CLOCK = clk_sys;
+media_ui_state #(.CLOCK_HZ(20000000)) player_ui_state
+(
+	.clk(clk_sys), .reset(reset), .new_file(new_file), .loaded(transport_loaded),
+	// N/P and the automatic end-to-start wrap are track transitions, not
+	// scrub seeks: both should show album time first and then track time.
+	.paused(transport_paused), .seeking(transport_seeking),
+	.elapsed_q(music_elapsed_q), .target_q(transport_target_q),
+	.duration_q(music_duration_q), .duration_valid(album_total != 0),
+	.music_mode(1'b1), .track_changed(album_track_changed),
+	.track_valid(album_track_valid && track_times_valid),
+	.track_elapsed_q(track_elapsed_q), .track_duration_q(track_duration_q),
+	.track_origin_q(track_origin_q), .album_duration_known(album_duration_known),
+	.scene_state(PLAYER_UI_STATE)
+);
+assign PLAYER_MUSIC_PAUSED = transport_paused || (flac_active && flac_prefilling);
 
 flac_album_control album_control
 (
@@ -713,13 +846,14 @@ flac_album_control album_control
 	.byte_valid(flac_input_valid && flac_input_ready), .byte_data(decoder_stream_data),
 	.position(album_position), .file_size(file_size_q),
 	.reader_start(reader_start), .landed(album_landed),
-	.seek_request(1'b0), .seek_target_q(35'd0),
+	.seek_request(album_seek_request), .seek_target_q(album_seek_target_q),
 	.restart(album_restart), .busy(album_busy), .resume_frame(album_resume),
 	.start_offset(album_offset), .start_sample(album_start), .target_sample(album_target),
 	.total_samples(album_total), .min_block(album_min), .max_block(album_max),
 	.tag(), .available(album_available), .seek_available(album_seek_available),
-	.current_track_valid(), .track_changed(), .current_track_number(),
-	.current_track_start(), .current_track_end()
+	.current_track_valid(album_track_valid), .track_changed(album_track_changed),
+	.current_track_number(album_track_number),
+	.current_track_start(album_track_start), .current_track_end(album_track_end)
 );
 
 assign stream_ready = sniffing   ? 1'b1 :
@@ -735,8 +869,9 @@ assign PLAYER_MUSIC = wav_active || flac_active;
 // `reset_mpeg2 || !media_music_mode` pattern for this same signal -- keeps
 // the CD-audio-side FIFO/CDC logic cleanly drained while unused, not just
 // reset for one cycle on new_file.
-assign PLAYER_PCM_RESET = decoder_reset || flac_restarting || !(wav_active || flac_active);
-assign PLAYER_PCM_VALID = wav_active ? wav_pcm_valid : flac_active ? flac_landing_valid : 1'b0;
+assign PLAYER_PCM_RESET = decoder_reset || (flac_restarting && !album_loop_pending) || !(wav_active || flac_active);
+assign PLAYER_PCM_VALID = wav_active ? wav_pcm_valid :
+	flac_active ? (flac_landing_valid && !(transport_loaded && flac_landing_eof)) : 1'b0;
 assign PLAYER_PCM_DATA  = wav_active  ? {wav_pcm_eof, wav_pcm_left, wav_pcm_right} :
                            flac_active ? {flac_landing_eof, flac_landing_pcm} :
                            33'd0;

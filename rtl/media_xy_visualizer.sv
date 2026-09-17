@@ -1,7 +1,7 @@
 // Stereo XY trace with eight phosphor levels in on-chip RAM. Audio is an
 // observation-only tap; line drawing and fading never backpressure playback.
 module media_xy_visualizer(
- input wire clk,active,sample_toggle,
+ input wire clk,active,sample_valid,output wire sample_ready,
  input wire signed [15:0] sample_left,sample_right,
  input wire [23:0] rgb,input wire hs,vs,de,layout_de,
  output reg [23:0] rgb_out=0,output reg hs_out=0,vs_out=0,de_out=0
@@ -44,11 +44,12 @@ module media_xy_visualizer(
  (* ramstyle="M10K, no_rw_check" *) reg phosphor2[0:65535];
  reg clear=1;reg [15:0] clear_address=0,fade_address=0;
  reg fade_busy=0;reg [1:0] fade_state=0;
- reg seen_toggle=0,pending=0,have_previous=0,drawing=0;
+ reg pending=0,have_previous=0,drawing=0;
  reg [7:0] pending_x=128,pending_y=128,previous_x=128,previous_y=128;
  reg [7:0] draw_x=64,draw_y=64,end_x=64,end_y=64,dx=0,dy=0;
  reg step_x=0,step_y=0;
  reg signed [9:0] error=0;
+ assign sample_ready=active&&!clear&&!pending;
  wire signed [10:0] twice_error=$signed({error[9],error})<<<1;
  wire move_x=twice_error>-$signed({3'd0,dy});
  wire move_y=twice_error<$signed({3'd0,dx});
@@ -71,15 +72,15 @@ module media_xy_visualizer(
   display_q<={phosphor2[{pixel_y,pixel_x}],phosphor1[{pixel_y,pixel_x}],phosphor0[{pixel_y,pixel_x}]};
  end
  always @(posedge clk)begin
-  seen_toggle<=sample_toggle;
   if(!active)begin
    clear<=1;clear_address<=0;pending<=0;drawing<=0;have_previous<=0;fade_busy<=0;fade_state<=0;
   end else if(clear)begin
    clear_address<=clear_address+1'b1;
    if(&clear_address)clear<=0;
   end else begin
-   // The latest sample wins if display work momentarily falls behind.
-   if(sample_toggle!=seen_toggle)begin
+   // The upstream FIFO holds its head stable until this renderer accepts it.
+   // `pending` provides one additional point while the current line draws.
+   if(sample_valid&&sample_ready)begin
     pending_x<=sample_left[15:8]^8'h80;pending_y<=~(sample_right[15:8]^8'h80);pending<=1;
    end
    if(frame_tick&&!fade_busy)begin fade_address<=0;fade_busy<=1;fade_state<=0;end
@@ -92,7 +93,7 @@ module media_xy_visualizer(
      error<=error-(move_x?$signed({2'd0,dy}):10'sd0)+(move_y?$signed({2'd0,dx}):10'sd0);
     end
    end else if(pending)begin
-    pending<=sample_toggle!=seen_toggle;drawing<=1;fade_state<=0;
+    pending<=0;drawing<=1;fade_state<=0;
     draw_x<=have_previous?previous_x:pending_x;draw_y<=have_previous?previous_y:pending_y;
     end_x<=pending_x;end_y<=pending_y;
     dx<=!have_previous?8'd0:(pending_x>=previous_x?pending_x-previous_x:previous_x-pending_x);

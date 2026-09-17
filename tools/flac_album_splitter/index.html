@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MiSTer FLAC Album Splitter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">MiSTer_MP3 utility</p>
+      <h1>FLAC Album Splitter</h1>
+      <p class="lede">Turn one indexed MiSTer FLAC album back into individual FLAC tracks. Everything stays in this browser.</p>
+    </header>
+    <section id="drop" class="drop" tabindex="0" role="button" aria-label="Choose a FLAC album">
+      <strong>Drop a FLAC album here</strong><span>or choose one album file</span>
+      <button id="choose" type="button">Choose album FLAC</button>
+      <input id="file" type="file" accept=".flac,audio/flac" hidden>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><div><h2>Detected tracks</h2><p id="summary">No album loaded.</p></div>
+        <button id="clear" class="quiet" type="button" disabled>Clear</button></div>
+      <ol id="tracks" aria-live="polite"></ol>
+    </section>
+    <section class="panel settings">
+      <label>Filename prefix<input id="name" value="album"></label>
+      <label>Compression<select id="compression">
+        <option value="5" selected>Level 5 — balanced</option>
+        <option value="8">Level 8 — smallest, slower</option>
+        <option value="0">Level 0 — fastest, larger</option>
+      </select></label>
+    </section>
+    <section class="actions">
+      <button id="split" class="primary" type="button" disabled>Split into tracks</button>
+      <a id="zip" class="button" hidden>Download all as ZIP</a>
+    </section>
+    <section class="status" aria-live="polite"><progress id="progress" max="1" value="0"></progress>
+      <p id="status">Choose a MiSTer FLAC album to begin.</p></section>
+    <details><summary>Compatibility and privacy</summary>
+      <p>The source must contain an embedded CUESHEET and use 44.1 kHz, 16-bit stereo audio. Each result is a standard, independently playable FLAC. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p>
+    </details>
+  </main>
+  <script src="../flac_album_builder/vendor/libflac.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

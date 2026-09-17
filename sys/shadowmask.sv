@@ -14,7 +14,8 @@ module shadowmask
 
 	output reg [23:0] dout,
 	output reg        hs_out,vs_out,
-	output reg        de_out
+	output reg        de_out,
+	output reg        brd_out
 );
 
 
@@ -85,6 +86,7 @@ end
 
 always @(posedge clk) begin
 	reg [11:0] vid;
+	reg  [3:0] brd;
 	reg  [7:0] r1,   g1,   b1;
 	reg  [7:0] r2,   g2,   b2;
 	reg  [7:0] r3_x, g3_x, b3_x; // 6.25% + 12.5%
@@ -94,6 +96,7 @@ always @(posedge clk) begin
 	// C1 - data input
 	{r1,g1,b1} <= din;
 	vid <= {vid[8:0],vs_in, hs_in, de_in};
+	brd <= {brd[2:0],brd_in};
 
 	// C2 - relax timings
 	{r2,g2,b2} <= {r1,g1,b1};
@@ -114,6 +117,7 @@ always @(posedge clk) begin
 	// C5 - clamp and output
 	dout <= {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
 	{vs_out,hs_out,de_out} <= vid[11:9];
+	brd_out <= brd[3];
 end
 
 // clock in mask commands

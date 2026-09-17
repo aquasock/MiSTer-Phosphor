@@ -35,13 +35,14 @@ pause, or playlist support beyond FLAC album next/previous-track navigation.
 | + WAV (Stage 1) | 11,577 | 28% | — | — | — | 3 |
 | + FLAC (Stage 2) | 13,512 | 32% | 16,686 | 191/553 (35%) | 67/112 (60%) | 4/6 (67%) |
 | + FLAC albums (current) | 14,354 | 34% | 18,074 | 196/553 (35%) | 67/112 (60%) | 4/6 (67%) |
-| + three visualizers, HDMI + analog (current) | 15,952 | 38% | 21,549 | 226/553 (41%) | 77/112 (69%) | 4/6 (67%) |
+| + three visualizers, FIFO + 2x XY FIR (current) | 16,161 | 39% | 21,909 | 227/553 (41%) | 78/112 (70%) | 4/6 (67%) |
 
 FLAC's LPC/prediction engine, Rice/CRC processing, and DDR interface
 account for the largest single jump (+1,947 ALMs); CUESHEET parsing,
-track/seek tables, and navigation add another 842 ALMs. The waveform, FFT,
-and XY visualizers add 1,554 ALMs, 30 M10Ks, and 10 DSPs. Comfortably within
-budget on this device at every stage; DSP usage (69%) is the tightest
+track/seek tables, and navigation add another 842 ALMs. The complete waveform,
+FFT, and XY subsystem -- including the ordered XY FIFO and 2x reconstruction
+filter -- adds 1,807 ALMs, 31 M10Ks, and 11 DSPs. Comfortably within budget
+on this device at every stage; DSP usage (70%) is the tightest
 resource, driven mostly by the standard MiSTer video-scaler framework
 (`ascal`), not the audio decoders themselves.
 
