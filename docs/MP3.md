@@ -190,8 +190,49 @@ further per explicit user direction ("don't worry about timing for now").
 `output_files/MiSTer_MP3.rbf` rebuilt (this same build also carries the
 WAV-silence fix above); not yet tested on real hardware.
 
-CUESHEET/album track navigation (`flac_album_control.sv`) is a separate,
-later stage on top of this plain FLAC playback.
+CUESHEET/album track navigation (`flac_album_control.sv`) was a separate,
+later stage on top of this plain FLAC playback and is now integrated below.
+
+### FLAC embedded-CUESHEET album navigation (done)
+
+Ported Phosphor's `flac_album_control.sv` and `media_ui_divider.sv`. The
+controller observes bytes actually accepted by the FLAC decoder, indexes up
+to 128 CUESHEET tracks and 512 SEEKTABLE points in M10K RAM, and maps the N/P
+keys to next/previous track. A navigation request cleanly cancels and drains
+the current reader/DDR session, restarts the mounted file at the selected
+seek-table byte offset, enables the decoder's resume path with preserved
+STREAMINFO parameters, and uses `flac_pcm_landing` to discard decoded preroll
+up to the exact track boundary. The four-byte format sniffer is deliberately
+not reset during this mid-file restart.
+
+`sim/compare_flac_album.py` generates a real two-track 44.1-kHz album with an
+embedded CUESHEET and SEEKTABLE, then verifies metadata parsing and both N/P
+navigation directions in Icarus. Full Quartus map/fit/asm completed with zero
+errors and produced `output_files/MiSTer_MP3.rbf`; TimeQuest is closed with
+positive setup, hold, recovery, removal, and pulse-width slack. Hardware
+playback and key-navigation validation remains pending.
+
+### HDMI and analog audio visualizers (done; transport UI intentionally deferred)
+
+Ported Phosphor's three resolution-independent renderers: dual waveforms,
+32-band FFT bars, and stereo O-Scope/XY. They render once on the core's native
+640x480 raster before the HDMI/analog split. Analog consumes that raster
+directly (or through the optional VGA scaler), while HDMI scales it through
+ASCAL before the standard OSD. `status[123:122]` selects the mode through the
+new Visualizer menu.
+
+MP3 and the native WAV/FLAC rail run from different audio clocks, so their
+clocks are never muxed. Each publishes coherent PCM plus a toggling sample
+event through `video_config_cdc`; `sys_top` selects the active source in
+`clk_sys` and supplies a single read-only stream to the analysis engines.
+There is no visualizer-to-audio ready path. The transport/progress overlay
+remains the existing passthrough stub for its later, separate stage.
+
+Full Quartus map/fit/asm completed with zero errors and all timing checks
+positive. The core raster uses a 25.2 MHz pixel clock with 800x525 totals,
+giving exactly 60 Hz so ASCAL does not introduce a 15:14 frame-drop cadence.
+The pre-split visualizer build uses 15,952 ALMs, 226 M10Ks, and 77 DSPs.
+Worst-case setup slack is +0.464 ns and hold slack is +0.245 ns.
 
 ### A real bug found on hardware: FLAC never appeared in the file browser
 
@@ -1179,9 +1220,9 @@ intensity-stereo all real, all validated).
 `MiSTer_MP3.sv` (the top-level `emu` module) plus `rtl/media_file_reader.sv`,
 `rtl/mp3_pcm_pack.sv`, `rtl/audio_pcm_fifo.sv`, and
 `rtl/audio_pcm_output_adapter.sv`. Deliberately minimal, matching the
-scope actually asked for: load a file from the OSD's file browser, decode
-it, play it. No seek, no pause, no playlist/album support -- those are
-real future work, not implemented here.
+scope originally asked for: load a file from the OSD's file browser, decode
+it, and play it. Embedded-CUESHEET FLAC next/previous-track navigation has
+since been added; general seek, pause, and playlists remain out of scope.
 
 **Framework reuse, not written from scratch.** `sys/` (hps_io, audio_out,
 the `sys_top.v` wrapper, board/pin configuration) is the standard MiSTer

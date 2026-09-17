@@ -78,7 +78,6 @@ assign OSD_HIDE_MESSAGE = 0;
 // WAV/FLAC playback -- see the format-dispatch section below and
 // docs/MP3.md. Driven for real further down; only the still-genuinely-
 // unused ones stay tied off here.
-assign PLAYER_VISUALIZER = 0;
 assign PLAYER_MUSIC_PAUSED = 0;
 assign PLAYER_UI_CLOCK = clk_sys;
 assign PLAYER_UI_STATE = 0;
@@ -97,7 +96,7 @@ assign VIDEO_ARY = 13'd3;
 // driven by a PLL output, not a raw input pin -- a real quartus_map error
 // on sys_top.v's video clock-switch blocks, not a style choice. Reuses
 // MiSTer-Phosphor's own already-working 4-output PLL wrapper (same board/
-// chip); only outclk_0 (clk_sys, 20MHz) and outclk_1 (clk_video, 27MHz)
+// chip); only outclk_0 (clk_sys, 20MHz) and outclk_1 (clk_video, 25.2MHz)
 // are used here. The whole decode pipeline has enormous real-time slack
 // even at 20MHz (docs/MP3.md), so the specific rate doesn't matter for
 // this MVP; timing closure work is future scope.
@@ -121,6 +120,7 @@ localparam CONF_STR = {
 	// MiSTer Main/ARM side -- the same trick MiSTer-Phosphor's own CONF_STR
 	// already uses ("MPGFL*" = "MPG" + "FL*") for this identical problem.
 	"S0,MP3WAVFL*,Load Audio;",
+	"O[123:122],Visualizer,Waveforms,FFT,O-Scope;",
 	"-;",
 	"T1,Reset;",
 	"R1,Reset and close OSD;",
@@ -129,6 +129,7 @@ localparam CONF_STR = {
 
 wire [1:0] buttons;
 wire [127:0] status;
+assign PLAYER_VISUALIZER = status[123:122];
 wire forced_scandoubler;
 wire [10:0] ps2_key;
 
@@ -198,19 +199,32 @@ wire decoder_reset = reset || new_file;
 // header comment -- so this can take a variable number of cycles), then
 // drop cancel and pulse start once, exactly as the original single-pulse
 // code assumed would always work.
-reg [63:0] file_size_q;
+wire album_restart, album_busy, album_resume, album_available, album_seek_available;
+wire [40:0] album_offset;
+wire [35:0] album_start, album_target, album_total;
+wire [15:0] album_min, album_max;
+wire album_landed, flac_quiescent;
+
+reg [63:0] file_size_q, reader_start_offset;
 reg reader_start, reader_cancel, switch_pending;
+wire flac_restarting = album_restart || (album_busy && (reader_cancel || switch_pending));
 always @(posedge clk_sys) begin
 	reader_start <= 1'b0;
 	if (reset) begin
 		file_size_q <= 64'd0;
+		reader_start_offset <= 64'd0;
 		reader_cancel <= 1'b0;
 		switch_pending <= 1'b0;
 	end else if (new_file) begin
 		file_size_q    <= img_size;
+		reader_start_offset <= 64'd0;
 		reader_cancel  <= 1'b1;
 		switch_pending <= 1'b1;
-	end else if (switch_pending && reader_idle) begin
+	end else if (album_restart) begin
+		reader_start_offset <= {23'd0, album_offset};
+		reader_cancel  <= 1'b1;
+		switch_pending <= 1'b1;
+	end else if (switch_pending && reader_idle && (!album_busy || flac_quiescent)) begin
 		reader_cancel  <= 1'b0;
 		reader_start   <= 1'b1;
 		switch_pending <= 1'b0;
@@ -225,7 +239,7 @@ media_file_reader media_file_reader
 (
 	.clk(clk_sys), .reset(reset),
 	.start(reader_start), .cancel(reader_cancel), .suspend(1'b0),
-	.file_size(file_size_q), .start_offset(64'd0),
+	.file_size(file_size_q), .start_offset(reader_start_offset),
 	.sd_lba(sd_lba[0]), .sd_blk_cnt(sd_blk_cnt[0]), .sd_rd(sd_rd[0]),
 	.sd_ack(sd_ack[0]), .sd_buff_wr(sd_buff_wr),
 	.sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout),
@@ -568,6 +582,11 @@ audio_pcm_output_adapter audio_pcm_output_adapter
 	.audio_l(AUDIO_L), .audio_r(AUDIO_R), .underrun(audio_underrun)
 );
 
+// Observation-only MP3 visualization tap. WAV and FLAC use the native
+// audio rail's existing tap; neither path can backpressure playback.
+assign PLAYER_CORE_PCM_ACTIVE = mp3_active;
+assign PLAYER_CORE_PCM_TICK = pcm_fifo_rd;
+
 assign AUDIO_S = 1'b1;
 assign AUDIO_MIX = 2'd0;
 
@@ -605,20 +624,20 @@ wav_decoder wav_decoder
 // itself is reserved for a genuinely new file (decoder_reset), matching
 // flac_ddr_decoder's own designed lifecycle (its start&&start_ready branch
 // already reinitializes every internal counter a fresh session needs).
-wire flac_cancel = !flac_active;
+wire flac_cancel = !flac_active || flac_restarting;
 reg flac_started;
 always @(posedge clk_sys) begin
-	if (decoder_reset || !flac_active) flac_started <= 1'b0;
+	if (decoder_reset || !flac_active || flac_restarting || album_restart) flac_started <= 1'b0;
 	else flac_started <= 1'b1;
 end
-wire flac_start = flac_active && !flac_started;
+wire flac_start = flac_active && !flac_started && !reader_cancel && !switch_pending;
 
 // flac_ddr_decoder wants a latched "no more bytes are coming" level
 // (input_end), not the in-band per-byte EOF marker this project's own
 // stream_data[8] convention uses -- latch it the first time it's seen.
 reg flac_eof_seen;
 always @(posedge clk_sys) begin
-	if (decoder_reset || !flac_active) flac_eof_seen <= 1'b0;
+	if (decoder_reset || !flac_active || flac_restarting || album_restart) flac_eof_seen <= 1'b0;
 	else if (decoder_stream_eof) flac_eof_seen <= 1'b1;
 end
 
@@ -634,12 +653,12 @@ wire [63:0] flac_mem_data;
 wire [7:0] flac_mem_be;
 wire flac_mem_read, flac_mem_write;
 
-flac_ddr_decoder #(.ENABLE_RESUME(0)) flac_decoder
+flac_ddr_decoder #(.ENABLE_RESUME(1)) flac_decoder
 (
 	.clk(clk_sys), .reset(decoder_reset), .cancel(flac_cancel), .start(flac_start),
-	.resume_frame(1'b0), .resume_sample(36'd0), .resume_total(36'd0),
-	.resume_min_block(16'd0), .resume_max_block(16'd0),
-	.start_ready(), .quiescent(),
+	.resume_frame(album_resume), .resume_sample(album_start), .resume_total(album_total),
+	.resume_min_block(album_min), .resume_max_block(album_max),
+	.start_ready(), .quiescent(flac_quiescent),
 	.input_data(decoder_stream_data), .input_valid(flac_input_valid), .input_end(flac_eof_seen), .input_ready(flac_input_ready),
 	.metadata_valid(), .total_samples(),
 	.pcm_valid(flac_pcm_valid), .pcm_eof(flac_pcm_eof), .pcm_ready(flac_landing_ready),
@@ -667,11 +686,40 @@ wire [31:0] flac_landing_pcm;
 
 flac_pcm_landing flac_landing
 (
-	.clk(clk_sys), .reset(decoder_reset || !flac_active),
-	.start_sample(36'd0), .target_sample(36'd0),
+	.clk(clk_sys), .reset(decoder_reset || !flac_active || flac_restarting),
+	.start_sample(album_start), .target_sample(album_target),
 	.input_valid(flac_pcm_valid), .input_eof(flac_pcm_eof), .input_pcm({flac_pcm_left, flac_pcm_right}), .input_ready(flac_landing_ready),
 	.output_valid(flac_landing_valid), .output_eof(flac_landing_eof), .output_pcm(flac_landing_pcm), .output_ready(PLAYER_PCM_READY),
-	.landed()
+	.landed(album_landed)
+);
+
+wire [35:0] native_music_position;
+video_config_cdc #(.WIDTH(36)) album_position_cdc
+(
+	.src_clk(CLK_AUDIO_CD), .dst_clk(clk_sys),
+	.src_data(PLAYER_MUSIC_POSITION), .dst_data(native_music_position)
+);
+wire [36:0] album_absolute_position = {1'b0, album_target} + {1'b0, native_music_position};
+wire [35:0] album_position = album_absolute_position[36] ? {36{1'b1}} : album_absolute_position[35:0];
+
+(* preserve, altera_attribute="-name AUTO_SHIFT_REGISTER_RECOGNITION OFF; -name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+reg [2:0] album_osd_sync = 0;
+always @(posedge clk_sys) album_osd_sync <= {album_osd_sync[1:0], OSD_STATUS};
+
+flac_album_control album_control
+(
+	.clk(clk_sys), .reset(reset), .new_file(new_file),
+	.enabled(flac_active), .osd_open(album_osd_sync[2]), .key(ps2_key),
+	.byte_valid(flac_input_valid && flac_input_ready), .byte_data(decoder_stream_data),
+	.position(album_position), .file_size(file_size_q),
+	.reader_start(reader_start), .landed(album_landed),
+	.seek_request(1'b0), .seek_target_q(35'd0),
+	.restart(album_restart), .busy(album_busy), .resume_frame(album_resume),
+	.start_offset(album_offset), .start_sample(album_start), .target_sample(album_target),
+	.total_samples(album_total), .min_block(album_min), .max_block(album_max),
+	.tag(), .available(album_available), .seek_available(album_seek_available),
+	.current_track_valid(), .track_changed(), .current_track_number(),
+	.current_track_start(), .current_track_end()
 );
 
 assign stream_ready = sniffing   ? 1'b1 :
@@ -687,7 +735,7 @@ assign PLAYER_MUSIC = wav_active || flac_active;
 // `reset_mpeg2 || !media_music_mode` pattern for this same signal -- keeps
 // the CD-audio-side FIFO/CDC logic cleanly drained while unused, not just
 // reset for one cycle on new_file.
-assign PLAYER_PCM_RESET = decoder_reset || !(wav_active || flac_active);
+assign PLAYER_PCM_RESET = decoder_reset || flac_restarting || !(wav_active || flac_active);
 assign PLAYER_PCM_VALID = wav_active ? wav_pcm_valid : flac_active ? flac_landing_valid : 1'b0;
 assign PLAYER_PCM_DATA  = wav_active  ? {wav_pcm_eof, wav_pcm_left, wav_pcm_right} :
                            flac_active ? {flac_landing_eof, flac_landing_pcm} :
@@ -697,10 +745,10 @@ assign PLAYER_PCM_DATA  = wav_active  ? {wav_pcm_eof, wav_pcm_left, wav_pcm_righ
 // This core has no picture of its own; the OSD (needed to select a file
 // from the menu in the first place) composites onto whatever video timing
 // the core provides, so a valid blanked signal is required even here.
-// Straightforward 640x480@~60Hz timing on the PLL's 27MHz clk_video_pll
-// output (close enough to standard 25.175MHz -- this core never drives a
-// real analog CRT), CE_PIXEL held permanently high (every clk_video_pll
-// cycle is a pixel).
+// 640x480 at exactly 60Hz using a 25.2MHz pixel clock and the standard
+// 800x525 total raster. Matching HDMI's 60Hz cadence avoids periodic ASCAL
+// frame drops, and also provides conventional 480p timing for analog output.
+// CE_PIXEL is held high because every clk_video_pll cycle is one pixel.
 assign CLK_VIDEO = clk_video_pll;
 assign CE_PIXEL = 1'b1;
 

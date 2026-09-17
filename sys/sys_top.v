@@ -1240,31 +1240,13 @@ cyclonev_hps_interface_peripheral_i2c hdmi_i2c
 
 	wire [23:0] hdmi_data_player;
 	wire hdmi_hs_player,hdmi_vs_player,hdmi_de_player;
-	wire [23:0] visual_rgb;
-	wire visual_hs,visual_vs,visual_de;
-	wire [47:0] audio_viewport_bounds;
-	wire audio_viewport_enabled;
-	video_config_cdc #(.WIDTH(48)) audio_viewport_config(.src_clk(clk_vid),.dst_clk(clk_hdmi),
-	 .src_data({hmin,hmax,vmin,vmax}),.dst_data(audio_viewport_bounds));
-	video_config_cdc #(.WIDTH(1)) audio_viewport_enable(.src_clk(clk_sys),.dst_clk(clk_hdmi),
-	 .src_data(music_request),.dst_data(audio_viewport_enabled));
-	wire [23:0] viewport_rgb;
-	wire viewport_hs,viewport_vs,viewport_de,viewport_layout_de;
-	media_audio_viewport audio_viewport(.clk(clk_hdmi),.enabled(audio_viewport_enabled),.bounds(audio_viewport_bounds),
-	 .rgb(hdmi_data_mask),.hs(hdmi_hs_mask),.vs(hdmi_vs_mask),.de(hdmi_de_mask),
-	 .rgb_out(viewport_rgb),.hs_out(viewport_hs),.vs_out(viewport_vs),.de_out(viewport_de),.layout_de(viewport_layout_de));
-	reg [8:0] viewport_layout_pipe=0;
-	always @(posedge clk_hdmi)viewport_layout_pipe<={viewport_layout_pipe[7:0],viewport_layout_de};
-	media_audio_visualizers visualizer(
-	 .control_clk(player_ui_clock),.select_visualizer(player_visualizer),
-	 .audio_clk(music_clock),.video_clk(clk_hdmi),.audio_active(visual_active),.sample_tick(visual_tick),
-	 .sample_left(visual_left),.sample_right(visual_right),
-	 .rgb(viewport_rgb),.hs(viewport_hs),.vs(viewport_vs),.de(viewport_de),.layout_de(viewport_layout_de),
-	 .rgb_out(visual_rgb),.hs_out(visual_hs),.vs_out(visual_vs),.de_out(visual_de));
+	// Visualizers are composed on the core raster before the HDMI/analog
+	// split below.  This HDMI-side block is now only the (currently stubbed)
+	// player overlay, preventing a second visualization pass after ASCAL.
 	media_player_overlay player_overlay(
 	 .control_clk(player_ui_clock),.video_clk(clk_hdmi),.control_state(player_ui_state),
 	 .subtitle_command(player_subtitle_command),.subtitle_ack(player_subtitle_ack),
-	 .rgb(visual_rgb),.hs(visual_hs),.vs(visual_vs),.de(visual_de),.layout_de(viewport_layout_pipe[8]),
+	 .rgb(hdmi_data_mask),.hs(hdmi_hs_mask),.vs(hdmi_vs_mask),.de(hdmi_de_mask),.layout_de(hdmi_de_mask),
 	 .rgb_out(hdmi_data_player),.hs_out(hdmi_hs_player),.vs_out(hdmi_vs_player),.de_out(hdmi_de_player));
 
 	osd hdmi_osd
@@ -1662,6 +1644,7 @@ assign SDCD_SPDIF = (mcp_en & ~spdif) ? 1'b0 : 1'bZ;
 
 wire native_scl_low,native_sda_low,native_hps_scl,native_hps_sda;
 wire [1:0] player_visualizer;
+wire core_pcm_active,core_pcm_tick;
 wire music_request,music_paused,music_pcm_reset,music_pcm_valid,music_pcm_ready;
 wire [32:0] music_pcm_data;
 wire music_clock,music_finished,music_error;
@@ -1681,6 +1664,30 @@ media_native_audio native_audio(.refclk(FPGA_CLK3_50),.config_clk(clk_sys),.wr_c
  .pad_scl(HDMI_I2C_SCL),.pad_sda(HDMI_I2C_SDA),.hps_scl_low(hdmi_scl_en),.hps_sda_low(hdmi_sda_en),
  .hps_scl_in(native_hps_scl),.hps_sda_in(native_hps_sda),.drive_scl_low(native_scl_low),.drive_sda_low(native_sda_low));
 wire clk_audio;
+
+// Normalize the independent MP3 and native WAV/FLAC sample events into
+// clk_sys. Toggle mailboxes carry coherent samples without any audio-side
+// ready signal or dynamically-muxed clock.
+reg core_sample_toggle=0,native_sample_toggle=0;
+always @(posedge clk_audio) if(core_pcm_tick) core_sample_toggle<=~core_sample_toggle;
+always @(posedge music_clock) if(visual_tick) native_sample_toggle<=~native_sample_toggle;
+wire [32:0] core_visual_sample,native_visual_sample;
+video_config_cdc #(.WIDTH(33)) core_visual_cdc(.src_clk(clk_audio),.dst_clk(clk_sys),
+ .src_data({core_sample_toggle,audio_l,audio_r}),.dst_data(core_visual_sample));
+video_config_cdc #(.WIDTH(33)) native_visual_cdc(.src_clk(music_clock),.dst_clk(clk_sys),
+ .src_data({native_sample_toggle,visual_left,visual_right}),.dst_data(native_visual_sample));
+wire native_visual_active;
+video_config_cdc #(.WIDTH(1)) native_visual_active_cdc(.src_clk(music_clock),.dst_clk(clk_sys),
+ .src_data(visual_active),.dst_data(native_visual_active));
+reg core_visual_seen=0,native_visual_seen=0;
+always @(posedge clk_sys) begin
+ core_visual_seen<=core_visual_sample[32];
+ native_visual_seen<=native_visual_sample[32];
+end
+wire selected_visual_active=music_request?native_visual_active:core_pcm_active;
+wire selected_visual_tick=music_request?(native_visual_sample[32]!=native_visual_seen):(core_visual_sample[32]!=core_visual_seen);
+wire signed [15:0] selected_visual_left=music_request?$signed(native_visual_sample[31:16]):$signed(core_visual_sample[31:16]);
+wire signed [15:0] selected_visual_right=music_request?$signed(native_visual_sample[15:0]):$signed(core_visual_sample[15:0]);
 
 pll_audio pll_audio
 (
@@ -1798,8 +1805,8 @@ wire [15:0] audio_l, audio_r;
 wire        audio_s;
 wire  [1:0] audio_mix;
 wire  [1:0] scanlines;
-wire  [7:0] r_out, g_out, b_out, hr_out, hg_out, hb_out;
-wire        vs_fix, hs_fix, de_emu, vs_emu, hs_emu, f1;
+wire  [7:0] r_out, g_out, b_out, core_r_out, core_g_out, core_b_out, hr_out, hg_out, hb_out;
+wire        vs_fix, hs_fix, de_emu, vs_emu, hs_emu, core_de_emu, core_vs_emu, core_hs_emu, f1;
 wire        hvs_fix, hhs_fix, hde_emu;
 wire        clk_vid, ce_pix, clk_ihdmi, ce_hpix;
 wire        vga_force_scaler;
@@ -1822,6 +1829,15 @@ wire  [1:0] btn;
 
 sync_fix sync_v(clk_vid, vs_emu, vs_fix);
 sync_fix sync_h(clk_vid, hs_emu, hs_fix);
+
+// Render once in the native core raster. Both ASCAL/HDMI and the direct
+// analog path consume these latency-matched outputs.
+media_audio_visualizers core_visualizer(
+	.control_clk(player_ui_clock),.select_visualizer(player_visualizer),
+	.audio_clk(clk_sys),.video_clk(clk_vid),.audio_active(selected_visual_active),.sample_tick(selected_visual_tick),
+	.sample_left(selected_visual_left),.sample_right(selected_visual_right),
+	.rgb({core_r_out,core_g_out,core_b_out}),.hs(core_hs_emu),.vs(core_vs_emu),.de(core_de_emu),.layout_de(core_de_emu),
+	.rgb_out({r_out,g_out,b_out}),.hs_out(hs_emu),.vs_out(vs_emu),.de_out(de_emu));
 
 wire  [6:0] user_out, user_in;
 
@@ -1882,12 +1898,12 @@ emu emu
 				 ce_hpix, hde_emu, hhs_fix, hvs_fix, 
 				 io_wait, clk_sys, io_fpga, io_uio, io_strobe, io_wide, io_din, io_dout}),
 
-	.VGA_R(r_out),
-	.VGA_G(g_out),
-	.VGA_B(b_out),
-	.VGA_HS(hs_emu),
-	.VGA_VS(vs_emu),
-	.VGA_DE(de_emu),
+	.VGA_R(core_r_out),
+	.VGA_G(core_g_out),
+	.VGA_B(core_b_out),
+	.VGA_HS(core_hs_emu),
+	.VGA_VS(core_vs_emu),
+	.VGA_DE(core_de_emu),
 	.VGA_F1(f1),
 	.VGA_SCALER(vga_force_scaler),
 
@@ -1937,7 +1953,8 @@ emu emu
 	.LED_POWER(led_power),
 	.LED_DISK(led_disk),
 
-	.PLAYER_VISUALIZER(player_visualizer),.PLAYER_MUSIC(music_request),.PLAYER_MUSIC_PAUSED(music_paused),
+	.PLAYER_VISUALIZER(player_visualizer),.PLAYER_CORE_PCM_ACTIVE(core_pcm_active),.PLAYER_CORE_PCM_TICK(core_pcm_tick),
+	.PLAYER_MUSIC(music_request),.PLAYER_MUSIC_PAUSED(music_paused),
  .PLAYER_PCM_RESET(music_pcm_reset),.PLAYER_PCM_VALID(music_pcm_valid),.PLAYER_PCM_DATA(music_pcm_data),.PLAYER_PCM_READY(music_pcm_ready),
  .CLK_AUDIO_CD(music_clock),.PLAYER_MUSIC_POSITION(music_position),.PLAYER_MUSIC_FINISHED(music_finished),.PLAYER_MUSIC_ERROR(music_error),
  .CLK_AUDIO(clk_audio),

@@ -31,13 +31,15 @@ module  pll_0002(
 		.output_clock_frequency0("20.000000 MHz"),
 		.phase_shift0("0 ps"),
 		.duty_cycle0(50),
-		.output_clock_frequency1("27.000000 MHz"),
+		.output_clock_frequency1("25.200000 MHz"),
 		.phase_shift1("0 ps"),
 		.duty_cycle1(50),
 		.output_clock_frequency2("60.000000 MHz"),
 		.phase_shift2("0 ps"),
 		.duty_cycle2(50),
-		.output_clock_frequency3("135.000000 MHz"),
+		// Unused output. 126 MHz shares an exact 1260 MHz VCO with the
+		// used 20 MHz and 25.2 MHz outputs (and the unused 60 MHz output).
+		.output_clock_frequency3("126.000000 MHz"),
 		.phase_shift3("0 ps"),
 		.duty_cycle3(50),
 		.output_clock_frequency4("0 MHz"),

@@ -95,7 +95,7 @@ set_false_path -to [get_keepers {*media_native_audio:*|mute_movie_sync[0]}]
 # unconstrained-input handling for that pin is a separate, pre-existing
 # condition shared by every MiSTer core built on this same sys/ framework,
 # not something introduced or fixed here.
-set native_audio_async_reset_srcs [get_keepers {reset_req *sysmem|init_reset_n* *emu:emu|sniff_count* *emu:emu|replay_count* *emu:emu|format_mode* *hps_io:hps_io|status[0] *hps_io:hps_io|cfg[1] *hps_io:hps_io|img_mounted[0] *emu:emu|img_mounted_d}]
+set native_audio_async_reset_srcs [get_keepers {reset_req *sysmem|init_reset_n* *emu:emu|sniff_count* *emu:emu|replay_count* *emu:emu|format_mode* *hps_io:hps_io|status[0] *hps_io:hps_io|cfg[1] *hps_io:hps_io|img_mounted[0] *emu:emu|img_mounted_d *emu:emu|switch_pending *flac_album_control:album_control|restart *flac_album_control:album_control|busy}]
 if {[get_collection_size $native_audio_async_reset_srcs] < 2} {error "Missing an expected native-audio async reset source (reset_req or the platform power-up reset)"}
 foreach chain {wr_reset_sync rd_reset_sync ref_reset_sync movie_reset_sync out_reset_sync} {
     set target [format {*media_native_audio:*|%s[*]} $chain]

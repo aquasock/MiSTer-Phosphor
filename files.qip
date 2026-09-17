@@ -40,10 +40,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_output_adapter.sv
 # instantiates a handful of Phosphor-specific modules for its own Menu
 # music-passthrough and OSD-visualizer features. This standalone core
 # doesn't participate in either, but still needs *something* satisfying
-# those module names to compile: video_config_cdc.sv and the HDMI-native-
-# audio-clock subsystem (rtl/platform/) are genuinely generic, reused
-# as-is; the three purely-cosmetic OSD/visualizer modules are replaced
-# with minimal passthrough stubs (see each file's own header comment).
+# those module names to compile. video_config_cdc.sv and the HDMI-native-
+# audio-clock subsystem (rtl/platform/) are genuinely generic and reused
+# as-is. The full visualizer cascade is now also included; only the transport
+# UI overlay remains a passthrough until its separate implementation stage.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_config_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pcm_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pcm_sink.sv
@@ -57,6 +57,13 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_hdmi_audio_con
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/media_native_audio.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_viewport.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_visualizers.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_waveform_visualizer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_fft.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_fire_renderer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_xy_visualizer.sv
+set_global_assignment -name HEX_FILE rtl/media_fft_window.hex
+set_global_assignment -name HEX_FILE rtl/media_fft_twiddle.hex
+set_global_assignment -name HEX_FILE rtl/media_fft_band_end.hex
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_player_overlay.sv
 
 # WAV: fixed 44.1kHz/16-bit/stereo profile, RIFF chunk-walk + raw PCM
@@ -66,9 +73,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/wav_decoder.sv
 
 # FLAC: reused verbatim from MiSTer-Phosphor (rtl/audio/flac/*.sv), fixed
 # 44.1kHz/16-bit/stereo profile, real external DDR frame storage (this
-# project's first DDR client) -- see docs/MP3.md. flac_album_control.sv
-# (CUESHEET track navigation) and its media_ui_divider dependency are a
-# later stage, not copied yet.
+# project's first DDR client) -- see docs/MP3.md. CUESHEET album navigation
+# and seek support are included alongside it.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_predict_mac.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stereo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_subframe.sv
@@ -76,6 +82,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stream_decode
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_frame_store.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_ddr_decoder.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_pcm_landing.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ui_divider.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_album_control.sv
 
 set_global_assignment -name SYSTEMVERILOG_FILE MiSTer_MP3.sv
 
