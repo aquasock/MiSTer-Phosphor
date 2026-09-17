@@ -20,19 +20,19 @@ reg reset = 1;
 reg new_file = 0;
 reg frame_valid = 0;
 reg frame_stereo = 0;
-reg frame_sample_rate_44k1 = 1;
+reg [1:0] frame_sr_idx = 0;
 reg in_valid = 0;
 reg [1:0] in_gci = 0;
 reg signed [15:0] in_data = 0;
 
-wire [33:0] fifo_wr_data;
+wire [34:0] fifo_wr_data;
 wire fifo_wr_en;
 
 mp3_pcm_pack dut (
     .clk(clk), .reset(reset),
     .new_file(new_file),
     .frame_valid(frame_valid), .frame_stereo(frame_stereo),
-    .frame_sample_rate_44k1(frame_sample_rate_44k1),
+    .frame_sr_idx(frame_sr_idx),
     .in_valid(in_valid), .in_gci(in_gci), .in_data(in_data),
     .fifo_wr_data(fifo_wr_data), .fifo_wr_en(fifo_wr_en)
 );
@@ -108,8 +108,8 @@ task send_and_check(input [1:0] gci, input signed [15:0] data, input expect_writ
                 $display("FAIL: gci=%0d data=%0d: no fifo_wr_en within 10 cycles", gci, data);
                 errors = errors + 1;
             end else begin
-                if (fifo_wr_data[33] !== 1'b0) begin
-                    $display("FAIL: gci=%0d data=%0d: expected rate48k=0 (44.1k file), got %b", gci, data, fifo_wr_data[33]);
+                if (fifo_wr_data[34:33] !== 2'd0) begin
+                    $display("FAIL: gci=%0d data=%0d: expected sr_idx=0 (44.1k file), got %b", gci, data, fifo_wr_data[34:33]);
                     errors = errors + 1;
                 end
                 if (fifo_wr_data[32] !== 1'b0) begin
@@ -138,7 +138,7 @@ initial begin
     // exactly like the real pipeline's huge cumulative latency.
     @(posedge clk);
     frame_stereo = 0;
-    frame_sample_rate_44k1 = 1; // 44.1kHz
+    frame_sr_idx = 2'd0; // 44.1kHz
     frame_valid = 1;
     @(posedge clk);
     frame_valid = 0;
@@ -159,7 +159,7 @@ initial begin
     new_file = 0;
     repeat (5) @(posedge clk);
     frame_stereo = 1;
-    frame_sample_rate_44k1 = 0; // 48kHz this time
+    frame_sr_idx = 2'd1; // 48kHz this time
     frame_valid = 1;
     @(posedge clk);
     frame_valid = 0;

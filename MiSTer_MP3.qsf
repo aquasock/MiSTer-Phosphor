@@ -315,3 +315,12 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SDIO_DAT[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_SPI*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
+set_global_assignment -name SDC_FILE MiSTer_MP3.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/wav_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_predict_mac.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stereo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_subframe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stream_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_frame_store.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_ddr_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_pcm_landing.sv

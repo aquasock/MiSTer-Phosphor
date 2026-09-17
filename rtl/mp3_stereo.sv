@@ -43,7 +43,7 @@ module mp3_stereo (
     input wire frame_valid,
     input wire stereo,
     input wire [1:0] mode_extension,
-    input wire sample_rate_44k1,
+    input wire [1:0] sr_idx,
     input wire window_switching_flag [0:3],
     input wire [1:0] block_type [0:3],
     input wire mixed_block_flag [0:3],
@@ -99,7 +99,7 @@ module mp3_stereo (
 
 reg l_stereo;
 reg [1:0] l_mode_extension;
-reg l_sample_rate_44k1;
+reg [1:0] l_sr_idx;
 reg l_window_switching_flag [0:3];
 reg [1:0] l_block_type [0:3];
 reg l_mixed_block_flag [0:3];
@@ -109,7 +109,7 @@ always @(posedge clk) begin
     if (frame_valid) begin
         l_stereo <= stereo;
         l_mode_extension <= mode_extension;
-        l_sample_rate_44k1 <= sample_rate_44k1;
+        l_sr_idx <= sr_idx;
         for (li = 0; li < 4; li = li + 1) begin
             l_window_switching_flag[li] <= window_switching_flag[li];
             l_block_type[li] <= block_type[li];
@@ -147,12 +147,17 @@ endfunction
 
 // -- Band-size ROMs (same content as mp3_dequant's, reloaded here since
 // this module doesn't share dequant's instance) --------------------------
-reg [7:0] band_size_long_rom [0:43];
-reg [7:0] band_size_short_rom [0:25];
+reg [7:0] band_size_long_rom [0:65];
+reg [7:0] band_size_short_rom [0:38];
 initial $readmemh("rtl/mp3_dequant_band_size_long.hex", band_size_long_rom);
 initial $readmemh("rtl/mp3_dequant_band_size_short.hex", band_size_short_rom);
-wire [5:0] long_row = l_sample_rate_44k1 ? 6'd0 : 6'd22;
-wire [4:0] short_row = l_sample_rate_44k1 ? 5'd0 : 5'd13;
+// long_row widened to 7 bits (not 6) on purpose: long_row+band_i_f is a
+// self-determined expression (used directly as a ROM index) with no wider
+// co-operand to force extension, and row 2's max address (44+21=65)
+// overflows 6 bits -- would have silently wrapped to 1 for every high-band
+// long lookup at 32kHz.
+wire [6:0] long_row = (l_sr_idx == 2'd0) ? 7'd0 : (l_sr_idx == 2'd1) ? 7'd22 : 7'd44;
+wire [5:0] short_row = (l_sr_idx == 2'd0) ? 6'd0 : (l_sr_idx == 2'd1) ? 6'd13 : 6'd26;
 
 function [7:0] band_size_of;
     input is_long_f;

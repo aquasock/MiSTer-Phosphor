@@ -22,8 +22,8 @@ Outputs (under rtl/):
                                leaf: bits[7:4]=x, bits[3:0]=y, rest 0;
                                internal: bits[23:12]=left_addr, bits[11:0]=right_addr.
   mp3_huffman_roots.hex    -- root node address per physical table (1..15).
-  mp3_band_index_long.hex  -- band_index_long[sample_rate_index][23], two
-                               rows (44100, 48000), 23 entries each.
+  mp3_band_index_long.hex  -- band_index_long[sample_rate_index][23], three
+                               rows (44100, 48000, 32000), 23 entries each.
 """
 import sys
 from pathlib import Path
@@ -128,7 +128,7 @@ def gen_huffman_roms():
 
 def gen_band_index_rom():
     lines = []
-    for sr in (44100, 48000):
+    for sr in (44100, 48000, 32000):
         sizes = BAND_SIZE_LONG[sr]
         idx = [0]
         k = 0
@@ -141,7 +141,7 @@ def gen_band_index_rom():
     with open(OUT_DIR / "mp3_band_index_long.hex", "w") as f:
         for line in lines:
             f.write(line + "\n")
-    print(f"band index: {len(lines)} entries (2 sample rates x 23)")
+    print(f"band index: {len(lines)} entries (3 sample rates x 23)")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ reg clk = 0;
 reg reset = 1;
 always #5 clk = ~clk;
 
-reg [7:0] mem [0:299999];
+reg [7:0] mem [0:4999999]; // room for several minutes of a real-world file, not just short synthetic test vectors
 initial $readmemh(HEX_FILE, mem);
 
 integer idx;
@@ -28,7 +28,7 @@ end
 wire frame_valid;
 wire stereo;
 wire [1:0] channel_mode, mode_extension;
-wire [9:0] frame_len;
+wire [10:0] frame_len;
 wire [8:0] main_data_begin;
 
 mp3_frame_parser dut (
@@ -68,8 +68,13 @@ always @(posedge clk) begin
     end
 end
 
+// Budget scales with NUM_FRAMES: dense real-world content (frequent window
+// switching, more granules with the full subblock_gain/table_select set)
+// costs noticeably more cycles/frame than the synthetic sine-tone test
+// vectors this fixed 2,000,000ns budget was originally sized for -- a real
+// VBR file needed ~22,730ns/frame here, nearly 6x the synthetic-content case.
 initial begin
-    #2000000 begin
+    #(2_000_000 + NUM_FRAMES * 30_000) begin
         $display("TIMEOUT waiting for %0d frames, got %0d", NUM_FRAMES, frame_count);
         $finish;
     end

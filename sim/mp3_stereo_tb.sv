@@ -32,9 +32,10 @@ always @(posedge clk) begin
     else if (input_valid && input_ready) idx <= idx + 1;
 end
 
-wire frame_valid, stereo, sample_rate_44k1;
+wire frame_valid, stereo;
+wire [1:0] sr_idx;
 wire [1:0] channel_mode, mode_extension;
-wire [9:0] frame_len;
+wire [10:0] frame_len;
 wire [8:0] main_data_begin;
 wire main_data_valid, main_data_start;
 wire [7:0] main_data_byte;
@@ -61,7 +62,7 @@ mp3_frame_parser parser (
     .frame_valid(frame_valid), .stereo(stereo),
     .channel_mode(channel_mode), .mode_extension(mode_extension),
     .frame_len(frame_len), .main_data_begin(main_data_begin),
-    .sample_rate_44k1(sample_rate_44k1),
+    .sr_idx(sr_idx),
     .scfsi(scfsi_flat),
     .part2_3_length(part2_3_length), .big_values(big_values), .global_gain(global_gain),
     .scalefac_compress(scalefac_compress), .window_switching_flag(window_switching_flag),
@@ -99,7 +100,7 @@ wire frame_done;
 
 mp3_huffman_decoder huff (
     .clk(clk), .reset(reset),
-    .frame_valid(frame_valid), .stereo(stereo), .sample_rate_44k1(sample_rate_44k1),
+    .frame_valid(frame_valid), .stereo(stereo), .sr_idx(sr_idx),
     .scfsi(scfsi_flat),
     .part2_3_length(part2_3_length), .big_values(big_values),
     .scalefac_compress(scalefac_compress), .window_switching_flag(window_switching_flag),
@@ -121,7 +122,7 @@ wire signed [31:0] dq_data;
 
 mp3_dequant dequant (
     .clk(clk), .reset(reset),
-    .frame_valid(frame_valid), .sample_rate_44k1(sample_rate_44k1),
+    .frame_valid(frame_valid), .sr_idx(sr_idx),
     .window_switching_flag(window_switching_flag), .block_type(block_type),
     .mixed_block_flag(mixed_block_flag), .global_gain(global_gain),
     .scalefac_scale(scalefac_scale), .preflag(preflag), .subblock_gain(subblock_gain),
@@ -138,7 +139,7 @@ wire signed [31:0] out_data;
 mp3_stereo stereo_dut (
     .clk(clk), .reset(reset),
     .frame_valid(frame_valid), .stereo(stereo), .mode_extension(mode_extension),
-    .sample_rate_44k1(sample_rate_44k1),
+    .sr_idx(sr_idx),
     .window_switching_flag(window_switching_flag), .block_type(block_type),
     .mixed_block_flag(mixed_block_flag),
     .sf_valid(sf_valid), .sf_gci(sf_gci), .sf_index(sf_index), .sf_data(sf_data),

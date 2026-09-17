@@ -59,4 +59,30 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_viewport.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_audio_visualizers.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_player_overlay.sv
 
+# WAV: fixed 44.1kHz/16-bit/stereo profile, RIFF chunk-walk + raw PCM
+# passthrough (see docs/MP3.md) -- first step of unifying MP3/FLAC/WAV
+# into one core.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/wav_decoder.sv
+
+# FLAC: reused verbatim from MiSTer-Phosphor (rtl/audio/flac/*.sv), fixed
+# 44.1kHz/16-bit/stereo profile, real external DDR frame storage (this
+# project's first DDR client) -- see docs/MP3.md. flac_album_control.sv
+# (CUESHEET track navigation) and its media_ui_divider dependency are a
+# later stage, not copied yet.
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_predict_mac.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stereo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_subframe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_stream_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_frame_store.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_ddr_decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/flac/flac_pcm_landing.sv
+
 set_global_assignment -name SYSTEMVERILOG_FILE MiSTer_MP3.sv
+
+# Project-specific timing constraints (see the file's own header for what
+# it does and why): loaded after sys/sys_top.sdc, whose own clock-group
+# assignment it refines, and after the reused HDMI-native-audio framework
+# files above, whose own accompanying constraints (never copied over from
+# MiSTer-Phosphor's MediaPlayer.sdc until this point) it ports the relevant
+# parts of.
+set_global_assignment -name SDC_FILE MiSTer_MP3.sdc

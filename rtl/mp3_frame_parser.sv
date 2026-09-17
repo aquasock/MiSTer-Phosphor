@@ -1,17 +1,23 @@
 // MPEG-1 Layer III frame header + side information extraction.
 //
-// Fixed profile per docs/MP3.md: CBR 128/192 kb/s, 44.1/48 kHz, mono or
-// stereo (including joint stereo). No validation of any kind is performed
-// on header fields beyond what's structurally required to locate the next
-// frame -- input outside the accepted profile is undefined behavior by
-// design, not a detected/reported condition.
+// Fixed profile per docs/MP3.md: any standard CBR/VBR/ABR bitrate (32-320
+// kb/s), 44.1/48/32 kHz, mono or stereo (including joint stereo). Free-format
+// (bitrate_index 0) and the reserved index (15) remain out of profile. No
+// validation of any kind is performed on header fields beyond what's
+// structurally required to locate the next frame -- input outside the
+// accepted profile is undefined behavior by design, not a detected/reported
+// condition.
 //
-// Frame length is a 4-entry lookup (two bitrates x two sample rates) plus
-// the padding bit, not a general multiply/divide -- see docs/MP3.md for
-// the derivation. Side-info field widths were derived by requiring the
-// granule/channel blocks to sum to exactly the ISO-fixed 256/136 bit total
-// (see tools/mp3_header_reference.py), not taken from a single memorized
-// source.
+// Frame length is a 42-entry lookup (all 14 standard bitrates x three sample
+// rates) plus the padding bit, not a general multiply/divide -- see
+// docs/MP3.md for the derivation. This is a superset of the same
+// avoid-a-hardware-divider technique the fixed-CBR profile originally used
+// with a 4-entry table, not a different approach: VBR/ABR streams still pick
+// their frame length from this same closed, per-frame set of standard
+// bitrates, they just no longer pick the same one every frame. Side-info
+// field widths were derived by requiring the granule/channel blocks to sum
+// to exactly the ISO-fixed 256/136 bit total (see
+// tools/mp3_header_reference.py), not taken from a single memorized source.
 module mp3_frame_parser (
     input wire clk, reset,
     input wire [7:0] input_data,
@@ -22,9 +28,9 @@ module mp3_frame_parser (
     output reg stereo,                // channel_mode != mono
     output reg [1:0] channel_mode,
     output reg [1:0] mode_extension,
-    output reg [9:0] frame_len,       // total frame length in bytes, including the 4-byte header
+    output reg [10:0] frame_len,      // total frame length in bytes, including the 4-byte header
     output reg [8:0] main_data_begin,
-    output reg sample_rate_44k1,      // 1 = 44100 Hz, 0 = 48000 Hz (the only two accepted rates)
+    output reg [1:0] sr_idx,          // raw header sample_rate_index: 0=44100Hz, 1=48000Hz, 2=32000Hz (the only accepted rates; 3=reserved, out of profile)
 
     output reg scfsi [0:1][0:3],
 
@@ -72,11 +78,10 @@ reg [5:0] state, return_state;
 reg [7:0] hdr_buf [0:39];
 reg [5:0] recv_count;          // bytes collected into hdr_buf so far
 reg [5:0] side_info_total_len; // 4 + optional 2 CRC bytes + 32/17 side info bytes
-reg [9:0] frame_recv_count;    // bytes consumed since the start of the current frame (header included)
+reg [10:0] frame_recv_count;   // bytes consumed since the start of the current frame (header included)
 
 reg protection_bit;
 reg [3:0] bitrate_idx;
-reg [1:0] sr_idx;
 reg padding;
 
 reg [8:0] bit_pos;   // absolute bit offset into hdr_buf, from the start of the frame
@@ -89,16 +94,63 @@ reg [1:0] nch;
 reg gr, ch;
 wire [1:0] gci = {gr, ch};
 
-function [9:0] frame_len_lut;
+function [10:0] frame_len_lut;
     input [3:0] br_idx;
     input [1:0] s_idx;
     input pad;
     begin case ({br_idx, s_idx})
-        {4'd9, 2'd0}:  frame_len_lut = 10'd417 + {9'd0, pad}; // 128k/44100
-        {4'd9, 2'd1}:  frame_len_lut = 10'd384 + {9'd0, pad}; // 128k/48000
-        {4'd11,2'd0}:  frame_len_lut = 10'd626 + {9'd0, pad}; // 192k/44100
-        {4'd11,2'd1}:  frame_len_lut = 10'd576 + {9'd0, pad}; // 192k/48000
-        default:       frame_len_lut = 10'd417; // out of profile: undefined behavior, avoid a zero-length livelock
+        // bitrate_index 1-14 (32-320 kb/s) x sample_rate_index 0-2
+        // (44100/48000/32000 Hz). Values are floor(144000 * bitrate_kbps /
+        // sample_rate_hz); bitrate_index 0 (free-format) and 15 (reserved),
+        // and sample_rate_index 3 (reserved), are out of profile and fall
+        // through to the default below. Every 32000 Hz entry divides evenly
+        // (144000/32000 = 4.5 exactly for every even bitrate_kbps, and every
+        // standard bitrate is even), so the padding bit is never actually
+        // set for that column by a real encoder -- same situation as the
+        // 48000 Hz column already had.
+        {4'd1, 2'd0}:  frame_len_lut = 11'd104  + {10'd0, pad}; // 32k/44100
+        {4'd1, 2'd1}:  frame_len_lut = 11'd96   + {10'd0, pad}; // 32k/48000
+        {4'd1, 2'd2}:  frame_len_lut = 11'd144  + {10'd0, pad}; // 32k/32000
+        {4'd2, 2'd0}:  frame_len_lut = 11'd130  + {10'd0, pad}; // 40k/44100
+        {4'd2, 2'd1}:  frame_len_lut = 11'd120  + {10'd0, pad}; // 40k/48000
+        {4'd2, 2'd2}:  frame_len_lut = 11'd180  + {10'd0, pad}; // 40k/32000
+        {4'd3, 2'd0}:  frame_len_lut = 11'd156  + {10'd0, pad}; // 48k/44100
+        {4'd3, 2'd1}:  frame_len_lut = 11'd144  + {10'd0, pad}; // 48k/48000
+        {4'd3, 2'd2}:  frame_len_lut = 11'd216  + {10'd0, pad}; // 48k/32000
+        {4'd4, 2'd0}:  frame_len_lut = 11'd182  + {10'd0, pad}; // 56k/44100
+        {4'd4, 2'd1}:  frame_len_lut = 11'd168  + {10'd0, pad}; // 56k/48000
+        {4'd4, 2'd2}:  frame_len_lut = 11'd252  + {10'd0, pad}; // 56k/32000
+        {4'd5, 2'd0}:  frame_len_lut = 11'd208  + {10'd0, pad}; // 64k/44100
+        {4'd5, 2'd1}:  frame_len_lut = 11'd192  + {10'd0, pad}; // 64k/48000
+        {4'd5, 2'd2}:  frame_len_lut = 11'd288  + {10'd0, pad}; // 64k/32000
+        {4'd6, 2'd0}:  frame_len_lut = 11'd261  + {10'd0, pad}; // 80k/44100
+        {4'd6, 2'd1}:  frame_len_lut = 11'd240  + {10'd0, pad}; // 80k/48000
+        {4'd6, 2'd2}:  frame_len_lut = 11'd360  + {10'd0, pad}; // 80k/32000
+        {4'd7, 2'd0}:  frame_len_lut = 11'd313  + {10'd0, pad}; // 96k/44100
+        {4'd7, 2'd1}:  frame_len_lut = 11'd288  + {10'd0, pad}; // 96k/48000
+        {4'd7, 2'd2}:  frame_len_lut = 11'd432  + {10'd0, pad}; // 96k/32000
+        {4'd8, 2'd0}:  frame_len_lut = 11'd365  + {10'd0, pad}; // 112k/44100
+        {4'd8, 2'd1}:  frame_len_lut = 11'd336  + {10'd0, pad}; // 112k/48000
+        {4'd8, 2'd2}:  frame_len_lut = 11'd504  + {10'd0, pad}; // 112k/32000
+        {4'd9, 2'd0}:  frame_len_lut = 11'd417  + {10'd0, pad}; // 128k/44100
+        {4'd9, 2'd1}:  frame_len_lut = 11'd384  + {10'd0, pad}; // 128k/48000
+        {4'd9, 2'd2}:  frame_len_lut = 11'd576  + {10'd0, pad}; // 128k/32000
+        {4'd10,2'd0}:  frame_len_lut = 11'd522  + {10'd0, pad}; // 160k/44100
+        {4'd10,2'd1}:  frame_len_lut = 11'd480  + {10'd0, pad}; // 160k/48000
+        {4'd10,2'd2}:  frame_len_lut = 11'd720  + {10'd0, pad}; // 160k/32000
+        {4'd11,2'd0}:  frame_len_lut = 11'd626  + {10'd0, pad}; // 192k/44100
+        {4'd11,2'd1}:  frame_len_lut = 11'd576  + {10'd0, pad}; // 192k/48000
+        {4'd11,2'd2}:  frame_len_lut = 11'd864  + {10'd0, pad}; // 192k/32000
+        {4'd12,2'd0}:  frame_len_lut = 11'd731  + {10'd0, pad}; // 224k/44100
+        {4'd12,2'd1}:  frame_len_lut = 11'd672  + {10'd0, pad}; // 224k/48000
+        {4'd12,2'd2}:  frame_len_lut = 11'd1008 + {10'd0, pad}; // 224k/32000
+        {4'd13,2'd0}:  frame_len_lut = 11'd835  + {10'd0, pad}; // 256k/44100
+        {4'd13,2'd1}:  frame_len_lut = 11'd768  + {10'd0, pad}; // 256k/48000
+        {4'd13,2'd2}:  frame_len_lut = 11'd1152 + {10'd0, pad}; // 256k/32000
+        {4'd14,2'd0}:  frame_len_lut = 11'd1044 + {10'd0, pad}; // 320k/44100
+        {4'd14,2'd1}:  frame_len_lut = 11'd960  + {10'd0, pad}; // 320k/48000
+        {4'd14,2'd2}:  frame_len_lut = 11'd1440 + {10'd0, pad}; // 320k/32000
+        default:       frame_len_lut = 11'd417; // out of profile: undefined behavior, avoid a zero-length livelock
     endcase end
 endfunction
 
@@ -147,18 +199,71 @@ always @(posedge clk) begin
             end
         end
 
+        // Both checks below match tools/mp3_header_reference.py's own frame
+        // acceptance criterion exactly (sync mask on byte 1, non-reserved
+        // bitrate/sample-rate index in byte 2 -- byte 3 is never validated,
+        // by either parser). Real MP3 files are typically preceded by an
+        // ID3v2 tag that can carry an embedded cover-art image; JPEG data is
+        // full of stray FF bytes (marker bytes and general entropy-coded
+        // content), some of which pass a first-byte-only or even a 2-byte
+        // sync check by pure chance. Without this, mp3_frame_parser locks
+        // onto the first such decoy and decodes complete garbage as "frame
+        // 0" -- this was only ever latent because every previous test
+        // vector was ffmpeg-lavfi-generated with a minimal ID3 tag never
+        // containing such a decoy. Applying the same check on every frame
+        // (not just the first) costs nothing for a well-formed stream --
+        // bitrate/sample-rate are always valid for every real frame in this
+        // project's accepted profile -- while adding automatic resync
+        // resilience against any future frame boundary miscalculation too.
         COLLECT_HEADER: if (input_valid) begin
-            hdr_buf[recv_count] <= input_data;
-            recv_count <= recv_count + 6'd1;
-            frame_recv_count <= frame_recv_count + 10'd1;
-            if (recv_count == 3) state <= HEADER_DECODE;
+            if (recv_count == 6'd1) begin
+                if ((input_data & 8'hE0) == 8'hE0) begin
+                    hdr_buf[1] <= input_data;
+                    recv_count <= 2;
+                    frame_recv_count <= frame_recv_count + 11'd1;
+                end else if (input_data == 8'hFF) begin
+                    hdr_buf[0] <= input_data;
+                    recv_count <= 1;
+                    frame_recv_count <= 1;
+                end else begin
+                    recv_count <= 0;
+                    frame_recv_count <= 0;
+                    state <= INIT_SYNC;
+                end
+            end else if (recv_count == 6'd2) begin
+                if (input_data[7:4] != 4'd0 && input_data[7:4] != 4'd15 && input_data[3:2] != 2'd3) begin
+                    hdr_buf[2] <= input_data;
+                    recv_count <= 3;
+                    frame_recv_count <= frame_recv_count + 11'd1;
+                end else if (hdr_buf[1] == 8'hFF && (input_data & 8'hE0) == 8'hE0) begin
+                    // Retry one byte later: the old byte 1 (already known to
+                    // be exactly FF) becomes the new byte 0, and this byte
+                    // becomes the new byte 1.
+                    hdr_buf[0] <= hdr_buf[1];
+                    hdr_buf[1] <= input_data;
+                    recv_count <= 2;
+                    frame_recv_count <= 2;
+                end else if (input_data == 8'hFF) begin
+                    hdr_buf[0] <= input_data;
+                    recv_count <= 1;
+                    frame_recv_count <= 1;
+                end else begin
+                    recv_count <= 0;
+                    frame_recv_count <= 0;
+                    state <= INIT_SYNC;
+                end
+            end else begin
+                hdr_buf[recv_count] <= input_data;
+                recv_count <= recv_count + 6'd1;
+                frame_recv_count <= frame_recv_count + 11'd1;
+                if (recv_count == 3) state <= HEADER_DECODE;
+            end
         end
 
         HEADER_DECODE: begin
             protection_bit <= hdr_buf[1][0];
             bitrate_idx <= hdr_buf[2][7:4];
             sr_idx <= hdr_buf[2][3:2];
-            sample_rate_44k1 <= hdr_buf[2][3:2] == 2'd0;
             padding <= hdr_buf[2][1];
             channel_mode <= hdr_buf[3][7:6];
             mode_extension <= hdr_buf[3][5:4];
@@ -173,7 +278,7 @@ always @(posedge clk) begin
         COLLECT_SIDEINFO: if (input_valid) begin
             hdr_buf[recv_count] <= input_data;
             recv_count <= recv_count + 6'd1;
-            frame_recv_count <= frame_recv_count + 10'd1;
+            frame_recv_count <= frame_recv_count + 11'd1;
             if (recv_count + 6'd1 == side_info_total_len) begin
                 bit_pos <= {(protection_bit ? 5'd4 : 5'd6), 3'd0};
                 gr <= 0; ch <= 0;
@@ -262,8 +367,8 @@ always @(posedge clk) begin
         MAIN_DATA_SKIP: if (input_valid) begin
             main_data_valid <= 1;
             main_data_byte <= input_data;
-            frame_recv_count <= frame_recv_count + 10'd1;
-            if (frame_recv_count + 10'd1 == frame_len) state <= FRAME_DONE;
+            frame_recv_count <= frame_recv_count + 11'd1;
+            if (frame_recv_count + 11'd1 == frame_len) state <= FRAME_DONE;
         end
 
         FRAME_DONE: begin

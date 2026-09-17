@@ -25,7 +25,7 @@ module mp3_dequant (
     input wire clk, reset,
 
     input wire frame_valid,
-    input wire sample_rate_44k1,
+    input wire [1:0] sr_idx,
     input wire window_switching_flag [0:3],
     input wire [1:0] block_type [0:3],
     input wire mixed_block_flag [0:3],
@@ -67,12 +67,12 @@ reg [7:0] l_global_gain [0:3];
 reg l_scalefac_scale [0:3];
 reg l_preflag [0:3];
 reg [2:0] l_subblock_gain [0:3][0:2];
-reg l_sample_rate_44k1;
+reg [1:0] l_sr_idx;
 
 integer li;
 always @(posedge clk) begin
     if (frame_valid) begin
-        l_sample_rate_44k1 <= sample_rate_44k1;
+        l_sr_idx <= sr_idx;
         for (li = 0; li < 4; li = li + 1) begin
             l_window_switching_flag[li] <= window_switching_flag[li];
             l_block_type[li] <= block_type[li];
@@ -111,14 +111,19 @@ wire [5:0] val_long_end = long_end_of(1'b0, l_block_type[value_gci], l_mixed_blo
 wire [5:0] val_short_start = short_start_of(1'b0, l_block_type[value_gci], l_mixed_block_flag[value_gci], l_window_switching_flag[value_gci]);
 
 // -- Band-size / pretab ROMs -----------------------------------------
-reg [7:0] band_size_long_rom [0:43];   // [sample_rate][band 0..21]
-reg [7:0] band_size_short_rom [0:25];  // [sample_rate][band 0..12]
+reg [7:0] band_size_long_rom [0:65];   // [sample_rate][band 0..21]
+reg [7:0] band_size_short_rom [0:38];  // [sample_rate][band 0..12]
 reg [3:0] pretab_rom [0:21];           // preflag=1 case only; preflag=0 is always zero
 initial $readmemh("rtl/mp3_dequant_band_size_long.hex", band_size_long_rom);
 initial $readmemh("rtl/mp3_dequant_band_size_short.hex", band_size_short_rom);
 initial $readmemh("rtl/mp3_dequant_pretab.hex", pretab_rom);
-wire [5:0] long_row = l_sample_rate_44k1 ? 6'd0 : 6'd22;
-wire [4:0] short_row = l_sample_rate_44k1 ? 5'd0 : 5'd13;
+// long_row widened to 7 bits (not 6) on purpose: long_row+band_i_f is a
+// self-determined expression (used directly as a ROM index) with no wider
+// co-operand to force extension, and row 2's max address (44+21=65)
+// overflows 6 bits -- would have silently wrapped to 1 for every high-band
+// long lookup at 32kHz.
+wire [6:0] long_row = (l_sr_idx == 2'd0) ? 7'd0 : (l_sr_idx == 2'd1) ? 7'd22 : 7'd44;
+wire [5:0] short_row = (l_sr_idx == 2'd0) ? 6'd0 : (l_sr_idx == 2'd1) ? 6'd13 : 6'd26;
 
 // -- Scale-factor-side: compute one exponent value per sf_valid event --
 reg signed [9:0] band_exponent [0:38];

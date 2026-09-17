@@ -54,8 +54,12 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE,
         SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS,
         SDRAM_nRAS, SDRAM_nCS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_RD,
-        DDRAM_DIN, DDRAM_BE, DDRAM_WE} = 0;
+// DDRAM: this project's first real DDR client, for FLAC's frame store
+// (flac_frame_store.sv double-buffers full decoded frames there -- too
+// large for on-chip block RAM at full profile). Driven for real further
+// down, direct passthrough with no arbiter: unlike MiSTer-Phosphor, which
+// muxes this same interface between its movie (video) and music (FLAC)
+// DDR clients, this core has no video DDR client to mux against.
 
 assign VGA_SL      = 0;
 assign VGA_F1      = 0;
@@ -66,14 +70,16 @@ assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 assign OSD_HIDE_MESSAGE = 0;
 
-// Phosphor-specific Menu music-passthrough ports (see module header) --
-// this standalone core doesn't participate in that feature.
-assign PLAYER_MUSIC = 0;
+// Phosphor-specific Menu music-passthrough ports -- this standalone core
+// doesn't implement the Menu-music/visualizer feature these were built
+// for, but PLAYER_MUSIC/PLAYER_PCM_* are also exactly the framework's own
+// generic "native audio" rail (sys_top.v wires media_native_audio's
+// movie-vs-cd mux to the real output pins already), reused here for
+// WAV/FLAC playback -- see the format-dispatch section below and
+// docs/MP3.md. Driven for real further down; only the still-genuinely-
+// unused ones stay tied off here.
 assign PLAYER_VISUALIZER = 0;
 assign PLAYER_MUSIC_PAUSED = 0;
-assign PLAYER_PCM_RESET = 0;
-assign PLAYER_PCM_VALID = 0;
-assign PLAYER_PCM_DATA = 0;
 assign PLAYER_UI_CLOCK = clk_sys;
 assign PLAYER_UI_STATE = 0;
 assign PLAYER_SUBTITLE_COMMAND = 0;
@@ -108,7 +114,13 @@ wire reset = RESET || status[0] || buttons[1];
 `include "build_id.v"
 localparam CONF_STR = {
 	"MiSTer_MP3;;",
-	"S0,MP3,Load MP3;",
+	// The OSD file-selector's extension field is parsed in fixed 3-character
+	// chunks with no delimiters, so a 4-character extension like FLAC can't
+	// be listed directly. "FL*" (a `*` as the 3rd character of a chunk)
+	// means "match anything starting with these first two letters" on the
+	// MiSTer Main/ARM side -- the same trick MiSTer-Phosphor's own CONF_STR
+	// already uses ("MPGFL*" = "MPG" + "FL*") for this identical problem.
+	"S0,MP3WAVFL*,Load Audio;",
 	"-;",
 	"T1,Reset;",
 	"R1,Reset and close OSD;",
@@ -157,14 +169,51 @@ reg img_mounted_d;
 always @(posedge clk_sys) img_mounted_d <= img_mounted[0];
 wire new_file = img_mounted[0] && !img_mounted_d;
 
+// Loading a second file must clear every stage of the decode chain, not
+// just mp3_pcm_pack's own latches (its only consumer of new_file before
+// this fix). Without this, mp3_frame_parser can still be mid-FSM-state
+// from wherever the old file's stream stopped (its own bitrate/sample-rate
+// resync logic can eventually recover, but only after decoding garbage for
+// a while), mp3_bit_reservoir/mp3_huffman_decoder/mp3_dequant/mp3_stereo/
+// mp3_antialias hold stale per-frame data, mp3_imdct's overlap_mem and
+// mp3_synthesis's V-history (both deliberately PERSISTENT across frames
+// within one file) carry the previous file's tail into the new file's
+// first output samples, and the admission-gate registers below could stay
+// stuck mid-wait. audio_pcm_fifo can also still hold unplayed samples from
+// the old file; dcfifo's aclr is safe to assert from this clock domain.
+wire decoder_reset = reset || new_file;
+
+// media_file_reader's IDLE state only ever honors a `start` pulse while
+// it's already idle -- a `start` arriving mid-transfer (still reading the
+// PREVIOUS file) is silently dropped, and the module just keeps streaming
+// the old file's remaining bytes to completion. Switching files while the
+// first one is still playing hit exactly this: mp3_decoder_reset correctly
+// cleared the decode chain, but the reader itself never stopped, so the old
+// file's tail kept flowing in and got audibly re-decoded and played -- the
+// user heard the previous file "still going" after selecting a new one.
+// Fixed by actually using `cancel` (already built into media_file_reader
+// for this, previously tied to 1'b0 and never driven): on a new file,
+// assert cancel and wait for the reader to actually report idle (it can't
+// abandon an in-flight SD block acknowledgement immediately -- see its own
+// header comment -- so this can take a variable number of cycles), then
+// drop cancel and pulse start once, exactly as the original single-pulse
+// code assumed would always work.
 reg [63:0] file_size_q;
-reg reader_start;
+reg reader_start, reader_cancel, switch_pending;
 always @(posedge clk_sys) begin
 	reader_start <= 1'b0;
-	if (reset) file_size_q <= 64'd0;
-	else if (new_file) begin
-		file_size_q  <= img_size;
-		reader_start <= 1'b1;
+	if (reset) begin
+		file_size_q <= 64'd0;
+		reader_cancel <= 1'b0;
+		switch_pending <= 1'b0;
+	end else if (new_file) begin
+		file_size_q    <= img_size;
+		reader_cancel  <= 1'b1;
+		switch_pending <= 1'b1;
+	end else if (switch_pending && reader_idle) begin
+		reader_cancel  <= 1'b0;
+		reader_start   <= 1'b1;
+		switch_pending <= 1'b0;
 	end
 end
 
@@ -175,7 +224,7 @@ wire sd_busy = !reader_idle;
 media_file_reader media_file_reader
 (
 	.clk(clk_sys), .reset(reset),
-	.start(reader_start), .cancel(1'b0), .suspend(1'b0),
+	.start(reader_start), .cancel(reader_cancel), .suspend(1'b0),
 	.file_size(file_size_q), .start_offset(64'd0),
 	.sd_lba(sd_lba[0]), .sd_blk_cnt(sd_blk_cnt[0]), .sd_rd(sd_rd[0]),
 	.sd_ack(sd_ack[0]), .sd_buff_wr(sd_buff_wr),
@@ -184,10 +233,94 @@ media_file_reader media_file_reader
 	.idle(reader_idle), .byte_position(), .requests(), .completions(), .max_wait(), .error()
 );
 
+///////// Format dispatch: sniff the first 4 bytes to pick MP3/WAV/FLAC /////////
+// Content-sniffed, not extension-based, mirroring MiSTer-Phosphor's own
+// media_duration_probe.sv, which tells its FLAC path apart from its movie
+// path the same way rather than using separate OSD entries.
+//
+// The sniffer is the sole consumer of the stream for exactly the first 4
+// real (non-EOF) bytes, buffering them; once format_mode is decided, those
+// same 4 bytes are replayed to the winning decoder from the buffer (not
+// re-read from the file) before live stream bytes resume -- every decoder
+// needs to see its own file starting at byte 0 (wav_decoder's RIFF walk
+// and flac_stream_decoder's own "fLaC" magic check both included), so the
+// sniffed bytes can't simply be discarded.
+localparam FMT_MP3 = 2'd0, FMT_WAV = 2'd1, FMT_FLAC = 2'd2;
+reg [1:0] format_mode;
+reg [7:0] sniff_buf [0:3];
+reg [2:0] sniff_count;    // 0..4, saturates: real bytes captured so far
+reg [2:0] replay_count;   // 0..4, saturates: buffered bytes replayed so far
+wire sniffing  = sniff_count < 3'd4;
+wire replaying = !sniffing && replay_count < 3'd4;
+wire format_committed = !sniffing;
+
+// The active decoder's own input_ready, needed so replay only advances
+// once a buffered byte is actually consumed -- see the always block below
+// for why this matters (flac_ddr_decoder specifically has a real one-cycle
+// gap between its `start` pulse and its internal reset actually
+// deasserting, unlike wav_decoder's purely combinational reset).
+wire active_input_ready = mp3_active  ? input_ready :
+                           wav_active  ? wav_input_ready :
+                           flac_active ? flac_input_ready :
+                           1'b0;
+
+always @(posedge clk_sys) begin
+	if (decoder_reset) begin
+		sniff_count  <= 3'd0;
+		replay_count <= 3'd0;
+		format_mode  <= FMT_MP3;
+	end else if (sniffing) begin
+		if (stream_valid && !stream_data[8]) begin
+			sniff_buf[sniff_count[1:0]] <= stream_data[7:0];
+			sniff_count <= sniff_count + 3'd1;
+			if (sniff_count == 3'd3) begin
+				// "RIFF" -> WAV, "fLaC" -> FLAC; anything else defaults to
+				// MP3, whose own parser already tolerates leading
+				// non-frame bytes (e.g. ID3v2 tags) by design.
+				if (sniff_buf[0] == 8'h52 && sniff_buf[1] == 8'h49 &&
+				    sniff_buf[2] == 8'h46 && stream_data[7:0] == 8'h46)
+					format_mode <= FMT_WAV;
+				else if (sniff_buf[0] == 8'h66 && sniff_buf[1] == 8'h4C &&
+				         sniff_buf[2] == 8'h61 && stream_data[7:0] == 8'h43)
+					format_mode <= FMT_FLAC;
+				else
+					format_mode <= FMT_MP3;
+			end
+		end
+	end else if (replaying) begin
+		// A real bug until fixed: this used to advance unconditionally
+		// every cycle, not gated by whether the active decoder actually
+		// consumed the byte. wav_decoder's reset is a direct combinational
+		// function of wav_active, so it was already ready the instant
+		// replay began and the bug never showed. flac_ddr_decoder's
+		// internal reset instead depends on a registered `decoder_active`
+		// flip-flop that only updates the cycle *after* its `start` pulse,
+		// so its real input_ready lags flac_active by one cycle -- with
+		// the old unconditional advance, the very first replayed byte
+		// ('f' of "fLaC") was silently dropped while the decoder was still
+		// coming out of reset, corrupting the magic-number check before
+		// decode ever really began. Symptom: FLAC files appeared in the
+		// browser (sniffing itself doesn't touch the decoder, so format
+		// detection worked) but never played.
+		if (active_input_ready) replay_count <= replay_count + 3'd1;
+	end
+end
+
+wire [7:0] decoder_stream_data  = replaying ? sniff_buf[replay_count[1:0]] : stream_data[7:0];
+wire       decoder_stream_valid = sniffing  ? 1'b0 :
+                                   replaying ? 1'b1 :
+                                   (stream_valid && !stream_data[8]);
+wire       decoder_stream_eof   = format_committed && !replaying && stream_data[8];
+
+wire mp3_active  = format_committed && (format_mode == FMT_MP3);
+wire wav_active  = format_committed && (format_mode == FMT_WAV);
+wire flac_active = format_committed && (format_mode == FMT_FLAC);
+
 ///////// MP3 decode chain (identical wiring to sim/mp3_synthesis_tb.sv) /////////
-wire frame_valid, stereo, sample_rate_44k1;
+wire frame_valid, stereo;
+wire [1:0] sr_idx;
 wire [1:0] channel_mode, mode_extension;
-wire [9:0] frame_len;
+wire [10:0] frame_len;
 wire [8:0] main_data_begin;
 wire main_data_valid, main_data_start;
 wire [7:0] main_data_byte;
@@ -232,7 +365,7 @@ wire stereo_idle, aa_idle, imdct_idle, synth_idle, pcm_fifo_has_room;
 wire downstream_idle = stereo_idle && aa_idle && imdct_idle && synth_idle && pcm_fifo_has_room;
 reg frame_pending, frame_done_seen;
 always @(posedge clk_sys) begin
-	if (reset) begin
+	if (decoder_reset) begin
 		frame_pending <= 1'b0;
 		frame_done_seen <= 1'b0;
 	end else if (frame_valid) begin
@@ -245,17 +378,17 @@ always @(posedge clk_sys) begin
 	end
 end
 wire admit_new_frame = !frame_pending;
-wire input_valid = stream_valid && !stream_data[8] && admit_new_frame;
-assign stream_ready = stream_data[8] ? 1'b1 : (input_ready && admit_new_frame);
+wire input_valid = mp3_active && decoder_stream_valid && admit_new_frame;
+wire mp3_stream_ready = decoder_stream_eof ? 1'b1 : (input_ready && admit_new_frame);
 
 mp3_frame_parser parser
 (
-	.clk(clk_sys), .reset(reset),
-	.input_data(stream_data[7:0]), .input_valid(input_valid), .input_ready(input_ready),
+	.clk(clk_sys), .reset(decoder_reset),
+	.input_data(decoder_stream_data), .input_valid(input_valid), .input_ready(input_ready),
 	.frame_valid(frame_valid), .stereo(stereo),
 	.channel_mode(channel_mode), .mode_extension(mode_extension),
 	.frame_len(frame_len), .main_data_begin(main_data_begin),
-	.sample_rate_44k1(sample_rate_44k1),
+	.sr_idx(sr_idx),
 	.scfsi(scfsi_flat),
 	.part2_3_length(part2_3_length), .big_values(big_values), .global_gain(global_gain),
 	.scalefac_compress(scalefac_compress), .window_switching_flag(window_switching_flag),
@@ -273,7 +406,7 @@ wire [7:0] resv_read_data;
 
 mp3_bit_reservoir resv
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(decoder_reset),
 	.main_data_valid(main_data_valid), .main_data_byte(main_data_byte),
 	.main_data_start(main_data_start), .main_data_begin(main_data_begin),
 	.frame_read_start(frame_read_start),
@@ -294,8 +427,8 @@ wire frame_done;
 
 mp3_huffman_decoder huff
 (
-	.clk(clk_sys), .reset(reset),
-	.frame_valid(frame_valid), .stereo(stereo), .sample_rate_44k1(sample_rate_44k1),
+	.clk(clk_sys), .reset(decoder_reset),
+	.frame_valid(frame_valid), .stereo(stereo), .sr_idx(sr_idx),
 	.scfsi(scfsi_flat),
 	.part2_3_length(part2_3_length), .big_values(big_values),
 	.scalefac_compress(scalefac_compress), .window_switching_flag(window_switching_flag),
@@ -317,8 +450,8 @@ wire signed [31:0] dq_data;
 
 mp3_dequant dequant
 (
-	.clk(clk_sys), .reset(reset),
-	.frame_valid(frame_valid), .sample_rate_44k1(sample_rate_44k1),
+	.clk(clk_sys), .reset(decoder_reset),
+	.frame_valid(frame_valid), .sr_idx(sr_idx),
 	.window_switching_flag(window_switching_flag), .block_type(block_type),
 	.mixed_block_flag(mixed_block_flag), .global_gain(global_gain),
 	.scalefac_scale(scalefac_scale), .preflag(preflag), .subblock_gain(subblock_gain),
@@ -337,9 +470,9 @@ wire st_mbf;
 
 mp3_stereo stereo_dut
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(decoder_reset),
 	.frame_valid(frame_valid), .stereo(stereo), .mode_extension(mode_extension),
-	.sample_rate_44k1(sample_rate_44k1),
+	.sr_idx(sr_idx),
 	.window_switching_flag(window_switching_flag), .block_type(block_type),
 	.mixed_block_flag(mixed_block_flag),
 	.sf_valid(sf_valid), .sf_gci(sf_gci), .sf_index(sf_index), .sf_data(sf_data),
@@ -359,7 +492,7 @@ wire aa_mbf;
 
 mp3_antialias aa_dut
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(decoder_reset),
 	.value_valid(st_valid), .value_gci(st_gci), .value_index(st_index), .value_data(st_data),
 	.value_wsf(st_wsf), .value_bt(st_bt), .value_mbf(st_mbf),
 	.out_valid(aa_valid), .out_gci(aa_gci), .out_index(aa_index), .out_data(aa_data),
@@ -374,7 +507,7 @@ wire signed [31:0] imdct_data;
 
 mp3_imdct imdct_dut
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(decoder_reset),
 	.value_valid(aa_valid), .value_gci(aa_gci), .value_index(aa_index), .value_data(aa_data),
 	.value_wsf(aa_wsf), .value_bt(aa_bt), .value_mbf(aa_mbf),
 	.out_valid(imdct_valid), .out_gci(imdct_gci), .out_index(imdct_index), .out_data(imdct_data),
@@ -388,26 +521,26 @@ wire signed [15:0] synth_data;
 
 mp3_synthesis synth_dut
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(decoder_reset),
 	.value_valid(imdct_valid), .value_gci(imdct_gci), .value_index(imdct_index), .value_data(imdct_data),
 	.out_valid(synth_valid), .out_gci(synth_gci), .out_sample(synth_sample), .out_data(synth_data),
 	.idle(synth_idle)
 );
 
 ///////// PCM pack + clock-domain FIFO + audio-rate output /////////
-wire [33:0] pcm_wr_data;
+wire [34:0] pcm_wr_data;
 wire pcm_wr_en;
 
 mp3_pcm_pack pcm_pack
 (
 	.clk(clk_sys), .reset(reset),
 	.new_file(new_file),
-	.frame_valid(frame_valid), .frame_stereo(stereo), .frame_sample_rate_44k1(sample_rate_44k1),
+	.frame_valid(frame_valid), .frame_stereo(stereo), .frame_sr_idx(sr_idx),
 	.in_valid(synth_valid), .in_gci(synth_gci), .in_data(synth_data),
 	.fifo_wr_data(pcm_wr_data), .fifo_wr_en(pcm_wr_en)
 );
 
-wire [33:0] pcm_rd_data;
+wire [34:0] pcm_rd_data;
 wire pcm_fifo_empty, pcm_fifo_full;
 wire [10:0] pcm_fifo_wr_usedw;
 wire pcm_fifo_rd;
@@ -421,7 +554,7 @@ assign pcm_fifo_has_room = pcm_fifo_wr_usedw < 11'd896;
 
 audio_pcm_fifo audio_pcm_fifo
 (
-	.reset(reset),
+	.reset(decoder_reset),
 	.wr_clk(clk_sys), .wr_data(pcm_wr_data), .wr_en(pcm_wr_en), .wr_full(pcm_fifo_full), .wr_usedw(pcm_fifo_wr_usedw),
 	.rd_clk(CLK_AUDIO), .rd_en(pcm_fifo_rd), .rd_data(pcm_rd_data), .rd_empty(pcm_fifo_empty)
 );
@@ -437,6 +570,128 @@ audio_pcm_output_adapter audio_pcm_output_adapter
 
 assign AUDIO_S = 1'b1;
 assign AUDIO_MIX = 2'd0;
+
+///////// WAV + FLAC decoders, sharing the native-audio rail /////////
+// This rail is genuinely separate from MP3's own path above, not a
+// compromise: media_native_audio (already part of this project's reused
+// sys/ framework, previously wired up but left completely inert) is fixed
+// at 44.1kHz internally (its own dedicated PLL, SPDIF hardcoded to that
+// rate), which is exactly WAV's and FLAC's accepted profile -- while MP3
+// already needs 44.1/48/32kHz and has its own working, real-hardware-
+// validated multi-rate path above. sys_top.v already wires this project's
+// own AUDIO_L/AUDIO_R into media_native_audio's "movie" input and mixes
+// movie-vs-cd audio to the real output pins based on PLAYER_MUSIC -- no
+// separate output mux needed here, just driving these ports correctly.
+wire wav_input_ready;
+wire wav_pcm_valid, wav_pcm_eof;
+wire signed [15:0] wav_pcm_left, wav_pcm_right;
+wire wav_input_valid = wav_active && decoder_stream_valid;
+wire wav_stream_ready = decoder_stream_eof ? 1'b1 : wav_input_ready;
+
+wav_decoder wav_decoder
+(
+	.clk(clk_sys), .reset(decoder_reset || !wav_active),
+	.input_data(decoder_stream_data), .input_valid(wav_input_valid), .input_ready(wav_input_ready),
+	.pcm_valid(wav_pcm_valid), .pcm_eof(wav_pcm_eof), .pcm_ready(PLAYER_PCM_READY),
+	.pcm_left(wav_pcm_left), .pcm_right(wav_pcm_right)
+);
+
+// FLAC: reused verbatim from MiSTer-Phosphor. Its own start/cancel/reset
+// split (distinct from wav_decoder's simpler "just hold reset" pattern)
+// exists because a DDR request already in flight must drain cleanly rather
+// than being abruptly abandoned -- cancel lets flac_frame_store's own state
+// machine finish an in-progress mem_read/mem_write before going idle, where
+// a hard reset would immediately deassert them mid-transaction. reset
+// itself is reserved for a genuinely new file (decoder_reset), matching
+// flac_ddr_decoder's own designed lifecycle (its start&&start_ready branch
+// already reinitializes every internal counter a fresh session needs).
+wire flac_cancel = !flac_active;
+reg flac_started;
+always @(posedge clk_sys) begin
+	if (decoder_reset || !flac_active) flac_started <= 1'b0;
+	else flac_started <= 1'b1;
+end
+wire flac_start = flac_active && !flac_started;
+
+// flac_ddr_decoder wants a latched "no more bytes are coming" level
+// (input_end), not the in-band per-byte EOF marker this project's own
+// stream_data[8] convention uses -- latch it the first time it's seen.
+reg flac_eof_seen;
+always @(posedge clk_sys) begin
+	if (decoder_reset || !flac_active) flac_eof_seen <= 1'b0;
+	else if (decoder_stream_eof) flac_eof_seen <= 1'b1;
+end
+
+wire flac_input_ready;
+wire flac_input_valid = flac_active && decoder_stream_valid;
+wire flac_stream_ready = decoder_stream_eof ? 1'b1 : flac_input_ready;
+
+wire flac_pcm_valid, flac_pcm_eof;
+wire signed [15:0] flac_pcm_left, flac_pcm_right;
+wire [3:0] flac_error;
+wire [28:0] flac_mem_addr;
+wire [63:0] flac_mem_data;
+wire [7:0] flac_mem_be;
+wire flac_mem_read, flac_mem_write;
+
+flac_ddr_decoder #(.ENABLE_RESUME(0)) flac_decoder
+(
+	.clk(clk_sys), .reset(decoder_reset), .cancel(flac_cancel), .start(flac_start),
+	.resume_frame(1'b0), .resume_sample(36'd0), .resume_total(36'd0),
+	.resume_min_block(16'd0), .resume_max_block(16'd0),
+	.start_ready(), .quiescent(),
+	.input_data(decoder_stream_data), .input_valid(flac_input_valid), .input_end(flac_eof_seen), .input_ready(flac_input_ready),
+	.metadata_valid(), .total_samples(),
+	.pcm_valid(flac_pcm_valid), .pcm_eof(flac_pcm_eof), .pcm_ready(flac_landing_ready),
+	.pcm_left(flac_pcm_left), .pcm_right(flac_pcm_right), .error(flac_error),
+	.mem_addr(flac_mem_addr), .mem_data(flac_mem_data), .mem_be(flac_mem_be),
+	.mem_read(flac_mem_read), .mem_write(flac_mem_write), .mem_busy(DDRAM_BUSY),
+	.mem_q(DDRAM_DOUT), .mem_q_valid(DDRAM_DOUT_READY)
+);
+
+assign DDRAM_CLK = clk_sys;
+assign DDRAM_ADDR = flac_mem_addr;
+assign DDRAM_DIN = flac_mem_data;
+assign DDRAM_BE = flac_mem_be;
+assign DDRAM_BURSTCNT = 8'd1;
+assign DDRAM_RD = flac_mem_read;
+assign DDRAM_WE = flac_mem_write;
+
+// Landing buffer: needed even without Stage 3's seek UI, since start_sample
+// = target_sample = 0 makes it a pure passthrough (discard = cursor <
+// target_sample = 0 < 0 = false, always) -- kept in place now so Stage 3
+// only has to drive real seek targets into it, not add the module.
+wire flac_landing_ready;
+wire flac_landing_valid, flac_landing_eof;
+wire [31:0] flac_landing_pcm;
+
+flac_pcm_landing flac_landing
+(
+	.clk(clk_sys), .reset(decoder_reset || !flac_active),
+	.start_sample(36'd0), .target_sample(36'd0),
+	.input_valid(flac_pcm_valid), .input_eof(flac_pcm_eof), .input_pcm({flac_pcm_left, flac_pcm_right}), .input_ready(flac_landing_ready),
+	.output_valid(flac_landing_valid), .output_eof(flac_landing_eof), .output_pcm(flac_landing_pcm), .output_ready(PLAYER_PCM_READY),
+	.landed()
+);
+
+assign stream_ready = sniffing   ? 1'b1 :
+                       replaying ? 1'b0 :
+                       mp3_active  ? mp3_stream_ready :
+                       wav_active  ? wav_stream_ready :
+                       flac_active ? flac_stream_ready :
+                       1'b0;
+
+assign PLAYER_MUSIC = wav_active || flac_active;
+// Held whenever neither WAV nor FLAC is the active format (sniffing/
+// replaying/MP3 all included), mirroring MiSTer-Phosphor's own
+// `reset_mpeg2 || !media_music_mode` pattern for this same signal -- keeps
+// the CD-audio-side FIFO/CDC logic cleanly drained while unused, not just
+// reset for one cycle on new_file.
+assign PLAYER_PCM_RESET = decoder_reset || !(wav_active || flac_active);
+assign PLAYER_PCM_VALID = wav_active ? wav_pcm_valid : flac_active ? flac_landing_valid : 1'b0;
+assign PLAYER_PCM_DATA  = wav_active  ? {wav_pcm_eof, wav_pcm_left, wav_pcm_right} :
+                           flac_active ? {flac_landing_eof, flac_landing_pcm} :
+                           33'd0;
 
 ///////// Minimal blanked video, purely to host the OSD /////////
 // This core has no picture of its own; the OSD (needed to select a file

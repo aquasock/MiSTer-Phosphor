@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate deterministic CBR MP3 test vectors covering this project's
-entire accepted profile: {128, 192} kb/s x {44100, 48000} Hz x {mono, stereo}.
+entire accepted profile: {128, 192} kb/s x {44100, 48000, 32000} Hz x
+{mono, stereo}.
 
 Self-contained -- synthesizes test tones via ffmpeg's lavfi sine source
 rather than depending on external sample audio, so the output is
@@ -18,7 +19,7 @@ from pathlib import Path
 OUT_DIR = Path(__file__).resolve().parent.parent / "test_vectors"
 DURATION_SEC = 5
 BITRATES_KBPS = (128, 192)
-SAMPLE_RATES_HZ = (44100, 48000)
+SAMPLE_RATES_HZ = (44100, 48000, 32000)
 
 
 def make_mono(path: Path, sample_rate: int, bitrate_kbps: int) -> None:
@@ -60,7 +61,7 @@ def main() -> int:
             make_mono(mono_path, sample_rate, bitrate_kbps)
             print(f"generating {stereo_path.name}")
             make_stereo(stereo_path, sample_rate, bitrate_kbps)
-    print(f"done -- 8 files in {OUT_DIR}")
+    print(f"done -- {2 * len(BITRATES_KBPS) * len(SAMPLE_RATES_HZ)} files in {OUT_DIR}")
     return 0
 
 

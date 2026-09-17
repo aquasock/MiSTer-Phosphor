@@ -27,7 +27,7 @@ module mp3_huffman_decoder (
     // From mp3_frame_parser.
     input wire frame_valid,
     input wire stereo,
-    input wire sample_rate_44k1,
+    input wire [1:0] sr_idx,
     input wire scfsi [0:1][0:3],
     input wire [11:0] part2_3_length [0:3],
     input wire [8:0] big_values [0:3],
@@ -87,7 +87,8 @@ wire nch1 = ~l_stereo; // 1 = mono (only channel 0 is real)
 // frame's header immediately afterward -- its output arrays are not held
 // stable for the (many-cycle) duration of this module's decode, so every
 // field must be copied here rather than read live from the parser ports.
-reg l_stereo, l_sample_rate_44k1;
+reg l_stereo;
+reg [1:0] l_sr_idx;
 reg l_scfsi [0:1][0:3];
 reg [11:0] l_part2_3_length [0:3];
 reg [8:0] l_big_values [0:3];
@@ -147,9 +148,9 @@ reg [1:0] sf_group;
 reg [3:0] sf_cur_slen;
 
 // -- Region sizing (big_values pairs per region, clamped) ------------
-reg [11:0] band_index_rom [0:45];
+reg [11:0] band_index_rom [0:68];
 initial $readmemh("rtl/mp3_band_index_long.hex", band_index_rom);
-wire [5:0] band_row = l_sample_rate_44k1 ? 6'd0 : 6'd23;
+wire [6:0] band_row = (l_sr_idx == 2'd0) ? 7'd0 : (l_sr_idx == 2'd1) ? 7'd23 : 7'd46;
 reg [8:0] region_size [0:2];
 reg [8:0] region_remaining;
 reg [1:0] region_idx;
@@ -213,7 +214,7 @@ always @(posedge clk) begin
             bit_pos <= {frame_read_start, 3'd0};
             gr_reg <= 0; ch_reg <= 0;
             l_stereo <= stereo;
-            l_sample_rate_44k1 <= sample_rate_44k1;
+            l_sr_idx <= sr_idx;
             for (i = 0; i < 4; i = i + 1) begin
                 l_part2_3_length[i] <= part2_3_length[i];
                 l_big_values[i] <= big_values[i];

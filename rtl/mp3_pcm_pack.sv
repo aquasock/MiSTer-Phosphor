@@ -17,33 +17,38 @@
 // modules) for a case the accepted profile doesn't need is not worth the
 // risk here -- a deliberate simplification specific to this player shell,
 // not a change to the decoder core's own per-frame correctness.
+//
+// fifo_wr_data's sr_idx[1:0] field carries the raw header sample-rate-index
+// value (0=44100Hz, 1=48000Hz, 2=32000Hz) straight through to
+// audio_pcm_output_adapter.sv, which picks the matching phase-accumulator
+// step for CLK_AUDIO pacing.
 module mp3_pcm_pack (
     input wire clk, reset,
 
     input wire new_file,             // pulses once when a new file starts; re-latches stereo/rate
     input wire frame_valid,          // from mp3_frame_parser
     input wire frame_stereo,
-    input wire frame_sample_rate_44k1,
+    input wire [1:0] frame_sr_idx,
 
     input wire in_valid,
     input wire [1:0] in_gci,
     input wire signed [15:0] in_data,
 
-    output reg [33:0] fifo_wr_data,  // {rate_48k, stereo, left[16], right[16]}
+    output reg [34:0] fifo_wr_data,  // {sr_idx[1:0], stereo, left[16], right[16]}
     output reg fifo_wr_en
 );
 
 reg stereo_latched;
-reg rate_44k1_latched;
+reg [1:0] sr_idx_latched;
 reg latched;
 
 always @(posedge clk) begin
     if (reset || new_file) begin
         latched <= 1'b0;
     end else if (!latched && frame_valid) begin
-        stereo_latched     <= frame_stereo;
-        rate_44k1_latched  <= frame_sample_rate_44k1;
-        latched            <= 1'b1;
+        stereo_latched  <= frame_stereo;
+        sr_idx_latched  <= frame_sr_idx;
+        latched         <= 1'b1;
     end
 end
 
@@ -84,7 +89,7 @@ always @(posedge clk) begin
                 ch0_wr_pos <= (ch0_wr_pos == 10'd575) ? 10'd0 : ch0_wr_pos + 10'd1;
                 if (!stereo_latched) begin
                     fifo_wr_en   <= 1'b1;
-                    fifo_wr_data <= {rate_44k1_latched ? 1'b0 : 1'b1, 1'b0, in_data, in_data};
+                    fifo_wr_data <= {sr_idx_latched, 1'b0, in_data, in_data};
                 end
             end else begin
                 // Channel 1 (gci 1 or 3): issue the read for this exact
@@ -98,7 +103,7 @@ always @(posedge clk) begin
         end
         if (pending_pair) begin
             fifo_wr_en   <= 1'b1;
-            fifo_wr_data <= {rate_44k1_latched ? 1'b0 : 1'b1, 1'b1, ch0_rd, pending_r_sample};
+            fifo_wr_data <= {sr_idx_latched, 1'b1, ch0_rd, pending_r_sample};
         end
     end
 end

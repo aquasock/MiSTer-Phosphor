@@ -28,7 +28,7 @@ initial $readmemh("/tmp/inj_sf1.hex", sf1_mem);
 reg frame_valid;
 reg stereo_r;
 reg [1:0] mode_extension_r;
-reg sample_rate_44k1_r;
+reg [1:0] sr_idx_r;
 reg window_switching_flag_r [0:3];
 reg [1:0] block_type_r [0:3];
 reg mixed_block_flag_r [0:3];
@@ -51,7 +51,7 @@ wire signed [31:0] out_data;
 mp3_stereo dut (
     .clk(clk), .reset(reset),
     .frame_valid(frame_valid), .stereo(stereo_r), .mode_extension(mode_extension_r),
-    .sample_rate_44k1(sample_rate_44k1_r),
+    .sr_idx(sr_idx_r),
     .window_switching_flag(window_switching_flag_r), .block_type(block_type_r),
     .mixed_block_flag(mixed_block_flag_r),
     .sf_valid(sf_valid), .sf_gci(sf_gci), .sf_index(sf_index), .sf_data(sf_data),
@@ -64,7 +64,7 @@ initial begin
     frame_valid = 0;
     sf_valid = 0; sf_gci = 0; sf_index = 0; sf_data = 0;
     value_valid = 0; value_gci = 0; value_index = 0; value_data = 0;
-    stereo_r = 1; mode_extension_r = 2'd3; sample_rate_44k1_r = 1;
+    stereo_r = 1; mode_extension_r = 2'd3; sr_idx_r = 2'd0;
     for (i = 0; i < 4; i = i + 1) begin
         window_switching_flag_r[i] = 1'b1;
         block_type_r[i] = 2'd1; // "start" block -- window-switched but treated as all-long

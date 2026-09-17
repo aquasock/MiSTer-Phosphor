@@ -1,5 +1,7 @@
 // Entry 395: codec-independent PCM clock-domain FIFO.
-// Word layout: {rate_48k, stereo, left[15:0], right[15:0]}.
+// Word layout: {sr_idx[1:0], stereo, left[15:0], right[15:0]} -- widened
+// from a single rate_48k bit to a 2-bit sample-rate index to add 32kHz
+// support (see mp3_pcm_pack.sv and audio_pcm_output_adapter.sv).
 //
 // Depth widened from the original 256 to 2048, and wr_usedw exposed, for
 // this project's own use: MP3's Layer III frame produces 1152 PCM
@@ -28,14 +30,14 @@ module audio_pcm_fifo
     input  wire        reset,
 
     input  wire        wr_clk,
-    input  wire [33:0] wr_data,
+    input  wire [34:0] wr_data,
     input  wire        wr_en,
     output wire        wr_full,
     output wire [10:0] wr_usedw,   // for the player shell's real-time admission pacing -- see header comment
 
     input  wire        rd_clk,
     input  wire        rd_en,
-    output wire [33:0] rd_data,
+    output wire [34:0] rd_data,
     output wire        rd_empty
 );
 
@@ -43,7 +45,7 @@ dcfifo #(
     .lpm_numwords         (2048),
     .lpm_showahead        ("ON"),
     .lpm_type             ("dcfifo"),
-    .lpm_width            (34),
+    .lpm_width            (35),
     .lpm_widthu           (11),
     .overflow_checking    ("ON"),
     .underflow_checking   ("ON"),

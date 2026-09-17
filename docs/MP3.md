@@ -10,12 +10,322 @@ behavior: garbage output, a stuck decoder, or a hang are all acceptable
 outcomes, not bugs to guard against. This is a deliberate resource-vs-
 robustness tradeoff for this project, not an oversight.
 
+## Multi-format player: WAV, FLAC, and MP3 in one core
+
+This project is becoming a unified player, not an MP3-only core: WAV, then
+FLAC (including FLAC-album-with-embedded-`CUESHEET` navigation, ported from
+MiSTer-Phosphor), share the file browser and as much architecture as
+possible with the MP3 decoder documented in the rest of this file. AC3 was
+considered and dropped -- it turned out not to actually exist in Phosphor's
+current codebase (its old ARM-helper-decoded implementation was removed in
+Phosphor's own v0.9.0).
+
+**Shared front end**: one OSD `S0` entry (`"S0,MP3WAV,Load Audio;"`, `FLAC`
+extension added in the next stage) and one `media_file_reader` instance
+feed a small format-sniff dispatcher in `MiSTer_MP3.sv`, which buffers the
+first 4 real (non-EOF) bytes of every newly-loaded file, checks them for
+`RIFF` (WAV; `fLaC` for FLAC in a later stage) and defaults to MP3
+otherwise, then *replays* those same 4 buffered bytes to the winning
+decoder (never re-reads them from the file) before live stream bytes
+resume. Content-sniffed, not extension-based -- the same approach
+Phosphor's own `media_duration_probe.sv` uses to tell its FLAC path apart
+from its movie path. Every decoder needs to see its own file starting at
+byte 0 (`wav_decoder.sv`'s RIFF walk included), which is why the sniffed
+bytes are replayed rather than discarded.
+
+**Two audio-output rails, deliberately, not a compromise**: MP3 keeps its
+existing `mp3_pcm_pack`→`audio_pcm_fifo`→`audio_pcm_output_adapter` path
+(`AUDIO_L`/`AUDIO_R`), multi-rate (44.1/48/32kHz) and no-backpressure,
+completely untouched. WAV (and FLAC, next stage) instead activate
+`rtl/platform/media_native_audio.sv` and the `PLAYER_MUSIC`/`PLAYER_PCM_*`
+ports -- part of this project's reused `sys/` framework since the original
+player-shell work, but left entirely inert until now. That subsystem is
+fixed at 44.1kHz internally (its own dedicated PLL, `spdif
+#(.SAMPLE_RATE(44100))` hardcoded) and has real backpressure
+(`PLAYER_PCM_READY`) -- exactly WAV's and FLAC's own fixed profile, and a
+genuinely different shape of interface than MP3's own pipeline. Forcing MP3
+onto this fixed-rate rail would mean generalizing real, hardware-validated
+MiSTer framework PLL/SPDIF code for no user-facing benefit; forcing WAV/FLAC
+onto MP3's rail would mean giving up their free real backpressure. Only one
+rail is ever actually driving output at a time regardless: `sys_top.v`
+already wires this project's own `AUDIO_L`/`AUDIO_R` into
+`media_native_audio`'s "movie" input, and that module's own internal
+`select_cd` mux (driven by `PLAYER_MUSIC`) already picks movie-vs-cd audio
+for the real physical output pins -- discovered by reading `sys_top.v`
+directly rather than assumed, and it meant no new output-muxing logic was
+needed in `MiSTer_MP3.sv` at all, just driving `PLAYER_MUSIC`/`PLAYER_PCM_*`
+correctly.
+
+### WAV (done)
+
+`rtl/wav_decoder.sv`: no real decode step, just RIFF chunk-walking to find
+the `data` chunk and stream it through as 16-bit stereo sample pairs, fixed
+at 44.1kHz/16-bit/stereo like every other accepted-profile decision in this
+project. The `fmt ` chunk's own fields (sample rate, bit depth, channel
+count) are never read at all -- zero-validation philosophy applies here
+too, and the chunk's only structurally-required role is its declared size,
+needed to skip it like any other non-`data` chunk. Real backpressure
+throughout (`pcm_ready`/`input_ready`), matching `flac_ddr_decoder`'s own
+interface shape so both feed the same rail uniformly.
+
+A real bug caught during validation, not by inspection: `pcm_eof` was
+originally a registered output that only updated inside the `if
+(pcm_ready)` branch, so it held the *previous* sample's eof value for every
+cycle `pcm_valid` was asserted while `pcm_ready` was stalled -- a real
+ready/valid handshake needs both signals stable together for the whole
+handshake, not just the accepting cycle. Fixed by making `pcm_valid`/
+`pcm_eof`/`pcm_left`/`pcm_right` pure combinational functions of already-
+registered state instead. Caught specifically because
+`sim/wav_decoder_tb.sv` drives `pcm_ready` with a pseudo-random multi-cycle
+stall pattern rather than holding it high always -- back-to-back-ready
+streaming would never have exercised the bug at all, worth remembering as a
+testbench-design lesson for any future real-backpressure interface.
+
+Validated against Python's stdlib `wave` module (an independent reference,
+not sharing any logic with the RTL's own RIFF walk) via
+`sim/compare_wav_decoder.py`, across two real ffmpeg-generated files (one
+with a `LIST`/`INFO` metadata chunk before `data`, exercising the generic
+chunk-skip path) and one hand-built synthetic file with a deliberately
+odd-sized junk chunk (exercising the RIFF pad-byte-on-odd-chunk-size rule,
+which neither real ffmpeg file happened to trigger) -- all samples matched
+exactly, `eof` correctly flagged on the last sample, in every case.
+
+Real Quartus: `quartus_map`/`fit`/`sta`/`asm` all 0 errors. Resource cost
+small (11,256 → 11,577 ALMs, +321, from `wav_decoder.sv` plus activating
+the previously-dormant native-audio rail for the first time). One real
+timing item surfaced and was partially addressed, then explicitly
+deprioritized by the user ("don't worry about timing for now"): activating
+`media_native_audio` with real data for the first time exposed that
+`wr_reset_sync`/`rd_reset_sync` (previously optimized away entirely, since
+nothing drove real data through that FIFO before) are real synthesized
+nodes now, and this project's own format-dispatch registers
+(`sniff_count`/`replay_count`/`img_mounted_d`/HPS `cfg[1]`, etc.) land in
+the async-assert fan-in of that reset synchronizer the same way Phosphor's
+own `media_music_mode` does for its analogous signal -- an SDC false-path
+fix was applied and improved the worst-case recovery slack
+(-12.2ns → -8.4ns) but was not driven to full closure at the user's
+explicit direction at the time. **Now fully closed -- see "Timing
+closure, part two" below.**
+
+### A real bug found in Stage 1, only visible once FLAC needed real DDR
+
+Testing on real hardware after Stage 1 showed WAV loaded but produced no
+audio at all. Root cause, found by tracing `sys_top.v` directly: this
+framework reuses `DDRAM_CLK` as `media_native_audio`'s own CD-audio-FIFO
+write clock (`wr_clk` = local wire `ram_clk` = `DDRAM_CLK`) -- not just for
+actual DDR memory traffic. Stage 1 tied the entire `DDRAM_*` bus, including
+`DDRAM_CLK`, to a constant `0` (WAV needs no DDR at all), so that FIFO's
+write-side reset synchronizer clocked on a signal that never toggled --
+meaning it could never release, `PLAYER_PCM_READY` could never assert, and
+`wav_decoder` stalled forever waiting for it. Silent on every output path,
+consistent with the report. Fixed as an incidental side effect of Stage 2
+below (`DDRAM_CLK` now drives a real clock, since FLAC genuinely needs DDR)
+-- worth remembering as a lesson on its own: a port tied to a constant
+because *this stage* doesn't need it can be a hidden dependency for some
+*other* already-active part of a shared, reused framework.
+
+### FLAC (done)
+
+Copied `rtl/audio/flac/*.sv` from Phosphor verbatim (`flac_ddr_decoder`,
+`flac_stream_decoder`, `flac_frame_store`, `flac_subframe`,
+`flac_predict_mac`, `flac_stereo`, `flac_pcm_landing` -- `flac_album_control`
+and its `media_ui_divider` dependency deferred to the album-navigation
+stage). `DDRAM_*` wired directly to `flac_ddr_decoder`'s `mem_*` ports, no
+arbiter (this core's only DDR client, unlike Phosphor's movie/music mux).
+PCM routed through `flac_pcm_landing.sv` into the same native-audio rail
+WAV already activates in Stage 1, muxed by `flac_active` alongside
+`wav_active`.
+
+**This RTL had never been simulated anywhere, by anyone, before this
+stage** -- confirmed (no testbench existed in Phosphor, despite
+`docs/FLAC.md` describing it as fully verified) -- so a first-ever
+testbench (`sim/flac_ddr_decoder_tb.sv`) was written with a small
+behavioral DDR memory model (a few cycles of read/write latency, since
+Icarus can't simulate the real Cyclone V DDR3 controller, matching this
+project's established pattern for every other un-simulatable Altera
+primitive). Validated against ffmpeg's real FLAC decoder (an independent
+reference, `sim/compare_flac_decoder.py`) across three real files: a tonal
+2-second file (exercises a genuine short final frame -- 88200 samples
+isn't a multiple of the file's constant 4608-sample block size), an
+identical-L/R file, and a decorrelated noise file -- **every sample matched
+exactly** in all three.
+
+**Two real bugs found and fixed during this validation, both worth
+remembering as bug classes**:
+1. **A bug in the new testbench, not the reused RTL.** The first draft
+   tied `flac_ddr_decoder`'s `start` input to a permanently-held `!reset`
+   instead of a proper one-shot pulse. `flac_frame_store.sv` legitimately
+   drops its own `active` flag right after the end-of-stream token is
+   consumed (part of its designed lifecycle); with `start` still held high,
+   this immediately re-triggered a full re-initialization the moment
+   `start_ready` came back, corrupting `total_samples`/`frame_position`
+   back to 0 right as the stream was trying to finish cleanly, and
+   surfacing as a `fail(6)` ("unexpected end of input") error. This project's
+   own real integration (`MiSTer_MP3.sv`) already gated `start` correctly
+   (`flac_active && !flac_started`) from the start -- only the *standalone
+   testbench* had the lazy version. Fixed by mirroring the same one-shot
+   pattern in the testbench. **Lesson: a testbench's own stimulus wiring
+   needs the same scrutiny as the RTL it's testing** -- an "obviously fine"
+   shortcut in test stimulus can fully explain an apparent RTL bug.
+2. **A print-spam bug that disguised a fast, correct rejection as a
+   multi-minute hang.** `flac_ddr_decoder`'s `error` output is a level that
+   stays asserted indefinitely once the decoder latches into its `FAILED`
+   state; the testbench's monitor `$display`d it unconditionally every
+   cycle rather than once, so a file correctly and immediately rejected for
+   being out-of-profile (a noise test file that turned out to be
+   accidentally 24-bit, not the intended 16-bit) produced 13+ million
+   log lines and looked exactly like a stuck simulation until traced with a
+   bounded-time probe. Fixed by printing once (`saw_error` latch) and
+   `$finish`ing shortly after. **Lesson: before concluding a simulation
+   "hung," check whether it's actually making bounded, fast progress
+   toward a real error** -- a flood of repeated output can look identical
+   to true non-termination from the outside (a `timeout` wrapper alone
+   can't tell them apart).
+
+Real Quartus: `quartus_map`/`fit`/`asm` all 0 errors. Resource cost real
+and expected for this stage (13,524 ALMs, +1,947 from Stage 1's 11,577 --
+FLAC's LPC/prediction engine, Rice/CRC processing, and the new DDR
+interface logic), still only 32% of the device. Timing not investigated
+further per explicit user direction ("don't worry about timing for now").
+`output_files/MiSTer_MP3.rbf` rebuilt (this same build also carries the
+WAV-silence fix above); not yet tested on real hardware.
+
+CUESHEET/album track navigation (`flac_album_control.sv`) is a separate,
+later stage on top of this plain FLAC playback.
+
+### A real bug found on hardware: FLAC never appeared in the file browser
+
+WAV and MP3 both worked after the fixes above, but FLAC files didn't show
+up in the OSD's file selector at all. Cause: the OSD extension field in
+`CONF_STR` is parsed in fixed 3-character chunks with no delimiters --
+`"MP3WAV"` is exactly two clean 3-character extensions, but `FLAC` is 4
+characters and doesn't fit that scheme directly. MiSTer-Phosphor's own
+`CONF_STR` already solves this identical problem (`"S0,MPGFL*,Load
+media;"`): a `*` as the third character of a chunk means "match anything
+starting with these first two letters" on the Main/ARM side, so `"FL*"`
+matches `.flac` (and anything else starting with `fl`) despite being a
+4-letter extension. Fixed by extending the entry to
+`"S0,MP3WAVFL*,Load Audio;"`.
+
+### A real bug found on hardware: FLAC loads (appears, starts reading) but never plays
+
+After the CONF_STR fix, FLAC files showed up and could be selected, but
+produced no audio -- the same symptom WAV had earlier in Stage 1, but with
+a different root cause this time (WAV's was the `DDRAM_CLK`/`ram_clk`
+issue above; this is unrelated).
+
+Root cause: the format-sniff dispatcher buffers the file's first 4 bytes
+to identify the format, then replays those same 4 bytes into the winning
+decoder before live stream bytes resume. The replay counter advanced
+unconditionally, one byte per clock, regardless of whether the active
+decoder actually accepted that byte:
+
+```systemverilog
+end else if (replaying) begin
+    replay_count <= replay_count + 3'd1;  // wrong: ignores input_ready
+end
+```
+
+This never affected WAV, because `wav_decoder`'s reset is purely
+combinational (`decoder_reset || !wav_active`) -- it's ready to accept a
+byte the instant `wav_active` goes high, the same cycle replay begins.
+`flac_ddr_decoder` is different: its internal reset depends on a
+registered `decoder_active` flip-flop that only updates the cycle *after*
+`start` is asserted (`flac_start = flac_active && !flac_started`, itself
+registered). So `flac_ddr_decoder`'s real readiness lags `flac_active` by
+one clock cycle. With the unconditional counter, the very first replayed
+byte (`'f'` of `"fLaC"`) was pushed and dropped while the decoder was
+still coming out of reset -- corrupting the magic-number check before real
+decoding ever began. This explains the full symptom: sniffing itself never
+touches the decoder (so FLAC still shows up in the browser and appears to
+"load"), but the decoder's very first byte is silently lost every time.
+
+Fixed by gating the replay counter on the active decoder's own
+`input_ready`, added as a new mux wire:
+
+```systemverilog
+wire active_input_ready = mp3_active  ? input_ready :
+                           wav_active  ? wav_input_ready :
+                           flac_active ? flac_input_ready :
+                           1'b0;
+...
+end else if (replaying) begin
+    if (active_input_ready) replay_count <= replay_count + 3'd1;
+end
+```
+
+Validated in simulation before rebuilding for hardware, via a new
+integration testbench (`sim/flac_dispatch_tb.sv`) that replicates the real
+sniff/replay/`flac_start` sequencing from `MiSTer_MP3.sv` -- not just
+`flac_ddr_decoder` in isolation, which `sim/flac_ddr_decoder_tb.sv` already
+covered and would not have caught this (the bug is in the dispatcher, not
+the decoder). Confirmed both directions: reintroducing the unconditional
+counter reproduces the exact reported symptom (immediate decode error,
+zero samples decoded), and the gated version decodes
+`test_vectors/stereo_44100.flac` bit-for-bit correctly from byte 0 (88200
+real samples + the synthetic EOF marker, matching the known-good result
+from the standalone decoder testbench). This testbench hand-copies the
+dispatcher logic rather than instantiating `MiSTer_MP3.sv` directly, so it
+validates the *design* of the sequencing, not that the copy stays in sync
+with the real module -- treat it as a one-time confirmation of this fix,
+not an ongoing regression suite member.
+
+User confirmed on real hardware: FLAC now plays correctly.
+
+### Timing closure, part two: the recovery-slack item is now fully closed
+
+With FLAC playback confirmed working, revisited the recovery-slack item
+left open in Stage 1/2 ("don't worry about timing for now"). Traced the
+actual failing path directly rather than guessing further, via
+`report_timing -recovery -to_clock [get_clocks
+{native_audio|clocks|cd_pll|...divclk}]` in a `quartus_sta -t` script (same
+technique as the original Stage-9 timing-closure investigation earlier in
+this doc). Worst-case slack was still -9.032ns, TNS -27.091, all landing on
+`media_native_audio:native_audio|rd_reset_sync[*]`.
+
+The real source, found this time by reading the reported "From Node" of
+each failing path instead of assuming the existing async-source list was
+already complete: **a second contributor to `PLAYER_PCM_RESET` that was
+never added to the SDC's async-reset-source list.**
+`PLAYER_PCM_RESET = decoder_reset || !(wav_active||flac_active)`, and
+`decoder_reset = reset || new_file` -- both `reset` (`RESET || status[0] ||
+buttons[1]`, the OSD/joypad reset request) and `new_file`
+(`img_mounted[0] && !img_mounted_d`, the new-file-loaded edge) are exactly
+the same class of async, level-type "start fresh" signal as `reset_req`/
+`init_reset_n` already in that list -- just not enumerated, because this
+particular fan-in path (through `PLAYER_PCM_RESET` specifically, as
+opposed to `!wav_active` alone) was never traced before. The four real
+registers TimeQuest reported as the actual failing paths' launch points
+(`hps_io|status[0]`, `hps_io|cfg[1]` [= `buttons[1]`, since `hps_io.sv`
+defines `assign buttons = cfg[1:0]`], `hps_io|img_mounted[0]`,
+`emu|img_mounted_d`) were added to `native_audio_async_reset_srcs` in
+`MiSTer_MP3.sdc`, reusing the exact same `foreach chain {...}` false-path
+loop already built for the other sources -- no new SDC construct needed,
+just a more complete source list. `RESET` itself is a raw top-level port,
+not a register, so it can't appear as a recovery launch source; its
+unconstrained-input status is a separate, pre-existing condition shared by
+every core on this `sys/` framework, not something this fix touches.
+
+Re-running `quartus_sta` after this change (no RTL change, so `map`/`fit`/
+`asm` were re-run only to keep the shipped `.rbf` and its `.sta.rpt`
+consistent as one artifact, not because the SDC-only change required it):
+**zero violations of any kind -- setup, hold, recovery, removal, minimum
+pulse width -- across every clock domain in the design**, matching the
+pre-multi-format MP3-only build's clean bar. Worst-case slack per category:
+setup 0.466ns, hold 0.252ns, recovery 3.860ns, removal 0.519ns. This
+closes the last open item from the WAV/FLAC unification work.
+
 ## Fixed profile
 
 - **MPEG-1 Layer III** only (no Layer I/II, no MPEG-2/2.5 low-sample-rate
   extension).
-- **CBR only**, and only two bitrates: **128 kb/s or 192 kb/s**.
-- **Sample rate: 44.1 kHz or 48 kHz** only (not 32 kHz).
+- **CBR, VBR, or ABR** -- any of the 14 standard bitrates (32-320 kb/s),
+  chosen independently by each frame's own header. Free-format
+  (bitrate_index 0) and the reserved index (15) remain out of profile.
+- **Sample rate: 44.1 kHz, 48 kHz, or 32 kHz** -- the full MPEG-1 Layer III
+  range. (32/44.1/48 kHz are the three MPEG-1 rates; the lower MPEG-2/2.5
+  "LSF" rates below 32 kHz remain out of scope, per the "Anything not
+  MPEG-1 Layer III" undefined-behavior condition below.)
 - **Mono or stereo** (including joint stereo — see below). Dual-channel
   (two independent mono channels in one stream, used for
   bilingual/multitrack audio) is out of scope: nothing deliberately blocks
@@ -74,28 +384,133 @@ Fields that don't affect bitstream layout or which decode path applies
 direct table lookup, emphasis, copyright, original) are consumed as part of
 reading the fixed 4-byte header but never examined or branched on.
 
-## Frame length: a 4-entry constant, not an arithmetic circuit
+## Frame length: a 42-entry constant table, not an arithmetic circuit
 
 Frame length in bytes is `floor(144 * bitrate / sample_rate) + padding_bit`.
-With exactly two bitrates and two sample rates in scope, this reduces to
-four known constants rather than a general multiply/divide — a direct
-resource-saving consequence of the fixed profile. Verified empirically
-(`ffprobe` packet sizes against `libmp3lame`-encoded CBR test files):
+With three accepted sample rates and all 14 standard bitrates in scope
+(VBR/ABR pick a different one of these per frame; free-format and the
+reserved index remain out of profile), this reduces to a 42-entry constant
+table rather than a general multiply/divide — the same resource-saving
+technique the original fixed-CBR profile used with a 4-entry table, just
+covering the full standard bitrate set and all three MPEG-1 sample rates
+instead of two of each:
 
-| Bitrate | Sample rate | Frame length              |
-|---------|-------------|----------------------------|
-| 128 kb/s | 44.1 kHz   | 417 bytes, or 418 with padding |
-| 192 kb/s | 44.1 kHz   | 626 bytes, or 627 with padding |
-| 128 kb/s | 48 kHz     | 384 bytes exactly, padding never set |
-| 192 kb/s | 48 kHz     | 576 bytes exactly, padding never set |
+| Bitrate (kb/s) | 44.1 kHz | 48 kHz | 32 kHz |
+|---|---|---|---|
+| 32  | 104 | 96  | 144  |
+| 40  | 130 | 120 | 180  |
+| 48  | 156 | 144 | 216  |
+| 56  | 182 | 168 | 252  |
+| 64  | 208 | 192 | 288  |
+| 80  | 261 | 240 | 360  |
+| 96  | 313 | 288 | 432  |
+| 112 | 365 | 336 | 504  |
+| 128 | 417 | 384 | 576  |
+| 160 | 522 | 480 | 720  |
+| 192 | 626 | 576 | 864  |
+| 224 | 731 | 672 | 1008 |
+| 256 | 835 | 768 | 1152 |
+| 320 | 1044| 960 | 1440 |
 
-The 48 kHz combinations divide evenly, so a genuine CBR encoder never needs
-to set the padding bit for them — only the two 44.1 kHz combinations
-actually exercise it. The padding bit still has to be read generically
-(the decoder doesn't know at compile time which of the four combinations a
-given file uses), but the frame-length computation itself is a 4-entry
-lookup indexed by `(bitrate_index, sample_rate_index)` plus one conditional
-+1, not a divider.
+(All 48 kHz and 32 kHz entries divide evenly -- 144000/32000 = 4.5 exactly
+for every even bitrate, and every standard bitrate is even -- so a genuine
+encoder never needs the padding bit for either column; several 44.1 kHz
+entries do.) The padding bit still has to be read generically, but the
+frame-length computation itself stays a lookup indexed by
+`(bitrate_index, sample_rate_index)` plus one conditional +1, not a
+divider. `frame_len` and the parser's internal byte counter are 11 bits
+wide (not 10) specifically because the largest entry, 1440 (320 kb/s @ 32
+kHz) + 1 padding = 1441, overflows a 10-bit field -- a real bug that would
+have silently wrapped/truncated once the table was widened past the old
+two-bitrate profile (1440 is also larger than the 44.1 kHz column's own
+max of 1044, worth noting since 32 kHz's *lower* sample rate is exactly why
+its frame lengths run *longer* for the same bitrate).
+
+### Locating the first frame past an ID3v2 tag
+
+A real-world MP3 is almost always preceded by an ID3v2 tag, and that tag
+frequently embeds cover art. JPEG data is full of stray `0xFF` bytes (marker
+bytes and general entropy-coded content), and it only takes one such byte
+followed by another with its top 3 bits set to look exactly like an MPEG
+sync word. `mp3_frame_parser.sv`'s header collection therefore validates
+not just the two-byte sync pattern (`0xFF` followed by a byte with the top 3
+bits set) but also that the bitrate and sample-rate index fields in the
+third header byte are non-reserved, before committing to a candidate as a
+real frame -- exactly matching `tools/mp3_header_reference.py`'s own
+acceptance criterion (the fourth header byte, channel mode/mode extension,
+is never validated by either parser). A rejected candidate re-anchors one
+byte later rather than dropping back to a slow byte-at-a-time rescan. This was purely latent under the old fixed-CBR-only
+profile: every prior test vector was an `ffmpeg`-lavfi-generated file with a
+minimal ID3 tag, never containing a decoy sync pattern, so the parser's
+weaker original one-byte sync check never actually got exercised against
+real-world content until a real ripped file (with embedded cover art) was
+used to validate VBR/ABR support. The check runs on every frame, not just
+the first, at no cost for well-formed streams (bitrate/sample-rate are
+always valid for a real frame in this project's profile) while adding
+automatic resync resilience against any future frame-boundary
+miscalculation.
+
+## 32 kHz support: a raw header field, not a derived bit
+
+The sample-rate signal threaded through the decode chain used to be a
+single `sample_rate_44k1` bit (`1 = 44100Hz, 0 = 48000Hz`), computed in
+`mp3_frame_parser.sv` as `sr_idx == 2'd0`. Adding 32 kHz meant this had to
+become a genuine 2-bit `sr_idx` output -- and since the header's own
+`sample_rate_index` field is already exactly that 2-bit value (0=44100,
+1=48000, 2=32000, 3=reserved), the parser now just forwards it directly
+instead of deriving a narrower signal from it, a small simplification
+alongside the width change. `sr_idx` replaces `sample_rate_44k1` as a port
+on every module that consumed it: `mp3_huffman_decoder`, `mp3_stereo`,
+`mp3_dequant`, and (via `mp3_pcm_pack`'s `frame_sr_idx`) the audio output
+path.
+
+Three ROM tables gained a third row (32 kHz's real scale-factor band
+sizes, taken from FFmpeg's `ff_band_size_long`/`ff_band_size_short` in
+`libavcodec/mpegaudiodec_common.c`, not derived/memorized):
+`mp3_band_index_long.hex` (`mp3_huffman_decoder`'s region-boundary table,
+69 entries now, was 46), and the shared
+`mp3_dequant_band_size_long.hex`/`_short.hex` pair (`mp3_stereo` and
+`mp3_dequant` both load these independently since they don't share an
+instance) -- 66 and 39 entries now, was 44 and 26. `mp3_dequant_pretab.hex`
+needed no change: `ff_mpa_pretab` is indexed by `preflag` alone, not by
+sample rate, confirmed directly from the FFmpeg source rather than assumed.
+
+**A real width bug caught before it shipped**: `long_row` (the per-sample-
+rate row offset into the shared band-size ROM, used as `long_row +
+band_i_f` directly as a ROM index) was 6 bits, sized for row values 0/22 --
+correct for two rows, but row 2's value (44) plus the largest long-band
+index (21) is 65, which overflows 6 bits and would have silently wrapped
+to address 1 for every high-band 32 kHz long-block lookup in both
+`mp3_stereo.sv` and `mp3_dequant.sv`. `long_row + band_i_f` is a
+self-determined expression (used directly as an array index with no wider
+co-operand to force extension), so Verilog computes it at the width of its
+widest operand -- widening `long_row` itself to 7 bits was the fix, not
+widening `band_i_f`. `short_row` (max value 26, max short-band index 12,
+sum 38) already fit in 6 bits and needed no width change. Caught by
+tracing through the arithmetic by hand while writing the change, not by a
+failing test -- the existing 8+4 test vectors (32 kHz's new files included)
+only exercise this decoder's real content, which never happens to probe
+every ROM address exhaustively; worth remembering that passing tests don't
+prove a ROM-indexing width is correct, only that the specific addresses
+exercised were.
+
+**Audio output pacing**: `audio_pcm_output_adapter.sv`'s CLK_AUDIO phase
+accumulator already generalizes to any rate trivially -- adding `RATE_32000
+= 26'd32000` and a third `rate_step` mux arm was the whole change, no
+redesign needed. The one structural change was carrying the rate through:
+`mp3_pcm_pack.sv`'s packed FIFO word widened from 34 to 35 bits
+(`{sr_idx[1:0], stereo, left[16], right[16]}`, replacing the old single
+`rate_48k` bit), and `audio_pcm_fifo.sv`'s `dcfifo` widened to match
+(`lpm_width` 34 -> 35). Bit positions for `stereo`/`left`/`right` are
+unchanged; only the top field grew from 1 bit to 2.
+
+Validated the same way as every other stage: `tools/make_test_mp3.py`
+extended to also generate 32 kHz mono/stereo CBR test vectors (12 files
+total now, was 8), all passing `sim/compare_frame_parser.py` and
+`sim/compare_synthesis.py` (full parser-through-synthesis chain, bit-exact
+PCM) at the new sample rate, with zero regression on the original 8
+44.1/48 kHz vectors or the real-world VBR Bach file used to validate
+VBR/ABR support.
 
 ## Side information size
 
@@ -934,10 +1349,161 @@ FIFO fix: unchanged from the pre-fix numbers to within rounding --
 11,159 ALMs (27%), 14,488 registers, 188 M10K blocks / 1,169,934 bits
 (34%/21%), 66 DSP blocks (59% -- the jump from the decoder-alone 33 is
 standard MiSTer video-scaler overhead, not the MP3 core), 4 PLLs (67%).
-Still comfortably within budget. Timing closure (TimeQuest) has not been
-run; given the decode pipeline's enormous documented real-time slack at
-every stage, and that real hardware now plays a full test file cleanly
-end to end, this is expected to be low-risk future work, not a blocker.
+Still comfortably within budget.
+
+### Timing closure (TimeQuest): run for the first time, real findings
+
+The first-ever `quartus_sta` run on this project surfaced genuine setup
+violations, not the clean bill of health the "enormous real-time slack"
+reasoning above might suggest -- worth recording precisely, since the two
+kinds of "slack" are unrelated (cycle-count budget vs. picosecond-level
+combinational delay), and the first was never actually a substitute
+argument for the second.
+
+The two largest violations (`native_audio|clocks|cd_pll`: -18.0ns setup,
+-388 TNS; `pll_audio|pll_audio_inst`: -10.3ns setup, -213 TNS) turned out to
+be a **missing-constraint artifact, not a real path problem**:
+`media_audio_clocks.sv`'s `altclkctrl` selector picks between two
+independently-running PLLs (the reused HDMI-native-audio subsystem's
+"music"/CD-audio clock and the "movie" clock) that are mutually exclusive
+in real hardware -- exactly one is ever selected -- but nothing told
+TimeQuest that, so it checked a synchronous relationship between two
+genuinely unrelated always-running clocks through the mux. `MiSTer-Phosphor`
+(the project this HDMI-audio subsystem was reused from, verbatim) already
+solves this in its own `MediaPlayer.sdc` via `create_generated_clock` +
+`set_clock_groups -physically_exclusive` -- that `.sdc` was never copied
+over alongside the RTL when the subsystem was reused (an oversight matching
+the "one file's cleanliness doesn't establish a whole folder's" lesson from
+the player-shell integration work). A second, smaller finding: this
+project's own PLL (`rtl/pll.v`) has two outputs, `clk_sys` and
+`clk_video_pll`, that `sys/sys_top.sdc`'s clock-group glob groups *together*
+(it doesn't need to separate them from each other) -- so the one genuine
+crossing between them (the board reset asserting into the blanked-video
+timing counters) was being checked as an ordinary synchronous path too.
+
+Fixed by porting the relevant parts of `MediaPlayer.sdc` (only the pieces
+touching modules this project actually reuses -- `video_config_cdc`,
+`media_native_audio`, `media_audio_clocks` -- explicitly not the
+MPEG-2/OSD-compositor-specific parts, which don't apply here) into a new
+`MiSTer_MP3.sdc`, plus a `clk_sys`/`clk_video_pll` clock-group split, loaded
+after `sys/sys_top.sdc` via a trailing `SDC_FILE` assignment in
+`files.qip`. Result: every setup and hold check across every clock domain
+in the design is now positive, including this project's own `clk_sys`
+(25.6ns) and `clk_video_pll` (26.2ns) -- both previously showing small
+(-2ns) violations that were the exact same clock-grouping artifact, not a
+real critical-path problem in this project's own RTL.
+
+### Follow-up: the recovery-slack item above is now fully closed
+
+`audio_mux_cd`/`audio_mux_movie` initially showed negative *recovery*
+slack (-8.5ns/-25.5 TNS and -4.7ns/-14.1 TNS) -- an async-reset-release
+timing check, not a data-path violation. Root-caused by querying the real
+post-fit netlist directly (`report_timing -recovery` in a `quartus_sta -t`
+script), not by guessing: the actual failing path was `reset_req` ->
+`media_native_audio:native_audio|out_reset_sync[*]`.
+
+Two separate things were wrong with the first attempt:
+1. **A real miss, not a synthesis quirk**: `reset_req` was grouped together
+   with three other names (`media_music_mode`/`media_session_control:*|
+   decoder_reset`/`reset_mpeg2_sync[2]`) from Phosphor's original
+   space-separated `get_keepers` list and dismissed as a whole group as
+   "Phosphor-specific, doesn't exist here" -- without checking each name
+   individually. `reset_req` is actually declared directly in
+   `sys/sys_top.v` (the generic MiSTer framework itself, reused by every
+   core built on this `sys/` tree, this one included), while the other
+   three genuinely are Phosphor-specific and genuinely don't exist in this
+   project (confirmed by grep). **Lesson: a multi-name exception list
+   ported from another project needs each name verified on its own, not
+   accepted or rejected as a whole group.**
+2. `wr_reset_sync`/`rd_reset_sync` (2 of the ported constraint's 5 chain
+   names) never resolved because they genuinely don't exist as synthesized
+   nodes in this build at all -- confirmed directly against the netlist
+   (`get_keepers {*media_native_audio*reset_sync*}` inside a
+   `quartus_sta -t` script lists only `ref_reset_sync`/`movie_reset_sync`/
+   `out_reset_sync`). This core never drives real data into
+   `media_native_audio`'s CD-audio/"music" input path (`PLAYER_PCM_*` all
+   tied to their "not participating" values), so Quartus's optimizer swept
+   that whole cascade despite the source's own `(* preserve *)` attribute
+   -- `preserve` stops a register being removed as *redundant*, it doesn't
+   stop one being removed once every consumer of its output is itself
+   proven unreachable. Not a bug in either the RTL or the original attempt
+   at the constraint, just two dropped chains that were correctly
+   nonexistent -- fixed by removing them from the `foreach` loop rather
+   than leaving a harmless-but-misleading no-op match attempt in place.
+
+With both fixed (`reset_req` added to the async-source list, the two dead
+chain names dropped), a clean rebuild shows **zero violations of any kind
+-- setup, hold, recovery, removal, minimum pulse width -- across every
+clock domain in the design.** `audio_mux_cd`/`audio_mux_movie` no longer
+even appear in the Recovery summary at all, since every path that used to
+land there is now correctly excluded.
+
+Real Quartus numbers after this fix: 11,136 ALMs (27%), 15,056 registers,
+188 M10K blocks / 1,230,182 bits (34%/22%), 66 DSP blocks (59%), 4 PLLs
+(67%) -- register count moved up from 14,529 (timing-driven synthesis
+working differently now that real constraints exist), ALM count essentially
+unchanged. Still comfortably within budget.
+
+After the 32 kHz support added below: 11,271 ALMs (27%, +135 from the three
+widened ROM tables and the extra sr_idx-selection logic), 15,038 registers,
+188 M10K blocks / 1,232,230 bits (34%/22%), 66 DSP blocks (59%), 4 PLLs
+(67%). Setup/hold still clean across every clock domain -- rerunning
+`quartus_sta` after this change confirmed the fix above holds regardless of
+what's added downstream in the decode chain, not just for the exact design
+snapshot it was first validated against.
+
+After closing the recovery-slack item (see the follow-up above): 11,256
+ALMs (27%), 15,026 registers, 188 M10K blocks / 1,232,230 bits (34%/22%),
+66 DSP blocks (59%), 4 PLLs (67%) -- negligible movement, all from dropping
+two now-provably-dead reset-sync chains' worth of false-path bookkeeping,
+not a real logic change. **Timing closure is genuinely complete as of this
+build: zero violations of any category across every clock domain.**
+
+### Switching files mid-playback: two real bugs, found on real hardware
+
+Loading a second file while the first was still playing produced audible
+distortion, then (after the first fix below) the previous file's audio
+kept playing right through the new selection -- the new file never
+actually started.
+
+1. **The decode chain was never reset on a new file, only on the board
+   reset button/OSD reset.** `mp3_pcm_pack.sv` was the only module that
+   ever cleared its own state on `new_file` (it already took a dedicated
+   port for this). Every other stage kept whatever state it was in from
+   the previous file: `mp3_frame_parser` could be mid-FSM-state,
+   `mp3_bit_reservoir`/`mp3_huffman_decoder`/`mp3_dequant`/`mp3_stereo`/
+   `mp3_antialias` held stale per-frame data, `mp3_imdct`'s `overlap_mem`
+   and `mp3_synthesis`'s V-history (both deliberately persistent *within*
+   one file, by design) carried the old file's tail into the new file's
+   first output samples, and `audio_pcm_fifo` could still hold unplayed
+   samples from the old file. Fixed with a single `decoder_reset = reset
+   || new_file` wire fed to every decode-chain module and to
+   `audio_pcm_fifo` (its `dcfifo` `aclr` is designed to be asserted safely
+   from this clock domain) -- `media_file_reader` and `mp3_pcm_pack` are
+   deliberately excluded from this (see bug 2, and `mp3_pcm_pack` already
+   handles it internally).
+2. **`media_file_reader`'s `start` pulse is silently dropped unless the
+   module is already idle** (`IDLE: if(start && !cancel && !sd_ack)`) --
+   if a new file is selected while the previous one is still mid-transfer,
+   the single `start` pulse the player shell issued on `new_file` simply
+   had no effect, and the module kept streaming the *old* file's remaining
+   bytes to completion. Combined with bug 1's fix, this meant the decode
+   chain got cleanly reset but was then fed the old file's tail as if it
+   were a new stream -- audible as the previous file continuing to play,
+   unaffected by the new selection. `media_file_reader` already exposes a
+   `cancel` input built for exactly this (drains any in-flight SD-block
+   acknowledgement before returning to idle, rather than abandoning it
+   mid-flight -- see the module's own header comment), but the player
+   shell hardwired it to `1'b0` and never drove it. Fixed with a small
+   sequencing register (`switch_pending`): on `new_file`, assert `cancel`
+   and wait for the reader to actually report `idle` (a variable number of
+   cycles, since it can't abandon an outstanding SD acknowledgement), then
+   drop `cancel` and pulse `start` once. Any stray trailing bytes from the
+   old file that reach the freshly-reset decode chain during that brief
+   window are harmless -- `mp3_frame_parser`'s own sync/bitrate validation
+   (added for the VBR/ABR work) just scans past them like any other
+   non-frame data, the same way it already skips ID3v2-embedded decoy
+   bytes.
 
 ## Undefined-behavior conditions (informational only, never checked)
 
@@ -945,9 +1511,16 @@ Listed here so anyone reusing this decoder in another project knows the
 actual contract, even though none of these are detected or guarded against
 in hardware:
 
-- Anything not MPEG-1 Layer III.
-- VBR, ABR, or free-format bitstreams (bitrate index changing frame to
-  frame, or bitrate index 0).
-- Any bitrate other than 128/192 kb/s, or sample rate other than 44.1/48 kHz.
+- Anything not MPEG-1 Layer III (this rules out the MPEG-2/2.5 "LSF"
+  sample rates below 32 kHz, not just Layer I/II).
+- Free-format bitstreams (bitrate index 0) or the reserved bitrate index (15).
+- The reserved sample-rate index (3).
 - Dual-channel mode.
-- A corrupted or truncated stream (no CRC checking, no sync-loss recovery).
+- A corrupted or truncated stream: no CRC checking, and no *general*
+  sync-loss recovery mid-stream. `mp3_frame_parser.sv` does validate the
+  bitrate/sample-rate index fields (not just the sync bits) before
+  committing to a candidate header and will resync one byte at a time if
+  they're invalid -- this exists to skip decoy sync-like patterns in an
+  ID3v2 tag's embedded cover art before the first real frame, not as a
+  general corruption-recovery feature, though it will incidentally also
+  recover from an isolated bad frame boundary elsewhere in the stream.

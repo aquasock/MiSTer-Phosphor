@@ -248,14 +248,20 @@ QUAD_BITS = {
 }
 
 # Scalefactor band sizes (in samples), long and short blocks, row 0 = 44100 Hz,
-# row 1 = 48000 Hz -- this project's only two accepted sample rates.
+# row 1 = 48000 Hz, row 2 = 32000 Hz -- this project's three accepted sample
+# rates. Values taken directly from FFmpeg's ff_band_size_long/ff_band_size_short
+# (libavcodec/mpegaudiodec_common.c), not derived/memorized, matching this
+# project's standing discipline of validating against the real reference
+# decoder's own tables rather than a general-knowledge MP3-spec source.
 BAND_SIZE_LONG = {
     44100: [4, 4, 4, 4, 4, 4, 6, 6, 8, 8, 10, 12, 16, 20, 24, 28, 34, 42, 50, 54, 76, 158],
     48000: [4, 4, 4, 4, 4, 4, 6, 6, 6, 8, 10, 12, 16, 18, 22, 28, 34, 40, 46, 54, 54, 192],
+    32000: [4, 4, 4, 4, 4, 4, 6, 6, 8, 10, 12, 16, 20, 24, 30, 38, 46, 56, 68, 84, 102, 26],
 }
 BAND_SIZE_SHORT = {
     44100: [4, 4, 4, 4, 6, 8, 10, 12, 14, 18, 22, 30, 56],
     48000: [4, 4, 4, 4, 6, 6, 10, 12, 14, 16, 20, 26, 66],
+    32000: [4, 4, 4, 4, 6, 8, 12, 16, 20, 26, 34, 42, 12],
 }
 
 # ff_mpa_pretab[preflag]: per-long-band preemphasis addend (mpegaudiodec_common.c).

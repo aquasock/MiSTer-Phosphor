@@ -77,12 +77,12 @@ def gen_frac_exp_table():
 
 
 def gen_band_size_roms():
-    """Plain (non-cumulative) band sizes, both sample rates, row0=44100/row1=48000
-    -- how many frequency positions a given band's exponent applies to.
-    Distinct from mp3_band_index_long.hex (mp3_huffman_decoder's cumulative
-    version, used for region boundaries)."""
+    """Plain (non-cumulative) band sizes, all three sample rates,
+    row0=44100/row1=48000/row2=32000 -- how many frequency positions a given
+    band's exponent applies to. Distinct from mp3_band_index_long.hex
+    (mp3_huffman_decoder's cumulative version, used for region boundaries)."""
     long_lines = []
-    for sr in (44100, 48000):
+    for sr in (44100, 48000, 32000):
         for size in BAND_SIZE_LONG[sr]:
             long_lines.append(f"{size:02x}")
     with open(OUT_DIR / "mp3_dequant_band_size_long.hex", "w") as f:
@@ -90,7 +90,7 @@ def gen_band_size_roms():
             f.write(line + "\n")
 
     short_lines = []
-    for sr in (44100, 48000):
+    for sr in (44100, 48000, 32000):
         for size in BAND_SIZE_SHORT[sr]:
             short_lines.append(f"{size:02x}")
     with open(OUT_DIR / "mp3_dequant_band_size_short.hex", "w") as f:

@@ -29,7 +29,7 @@ end
 
 wire frame_valid, stereo;
 wire [1:0] channel_mode, mode_extension;
-wire [9:0] frame_len;
+wire [10:0] frame_len;
 wire [8:0] main_data_begin;
 wire main_data_valid, main_data_start;
 wire [7:0] main_data_byte;

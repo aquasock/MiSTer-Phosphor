@@ -3,15 +3,18 @@
 // main_data_begin (from mp3_frame_parser) says how many bytes before the
 // current frame's own main-data bytes the frame's actual granule/Huffman
 // data starts -- up to 511 bytes backward, borrowing unused capacity from
-// previous frames. This is required even under this project's fixed-CBR
-// profile: per-granule bit allocation still varies frame to frame at a
-// fixed nominal bitrate, which is the entire reason the reservoir exists
-// (see docs/MP3.md).
+// previous frames. This is required even under CBR: per-granule bit
+// allocation still varies frame to frame at a fixed nominal bitrate, which
+// is the entire reason the reservoir exists (see docs/MP3.md). Under
+// VBR/ABR the reservoir is unchanged -- it already operates purely in terms
+// of main_data_begin and raw byte counts, with no bitrate assumption of its
+// own.
 //
 // BUFFER_BYTES_LOG2=11 (2048 bytes) comfortably covers the worst case: 511
-// bytes of backward reach plus one frame's own main-data contribution
-// (up to ~591 bytes at 192 kb/s/44.1 kHz), with margin for the Huffman
-// consumer lagging slightly behind the incoming stream.
+// bytes of backward reach plus one frame's own main-data contribution (up to
+// ~1008 bytes at 320 kb/s/44.1 kHz stereo, the largest standard bitrate this
+// project accepts), with margin for the Huffman consumer lagging slightly
+// behind the incoming stream.
 module mp3_bit_reservoir #(parameter BUFFER_BYTES_LOG2 = 11) (
     input wire clk, reset,
 
