@@ -3,6 +3,9 @@
 module media_player_overlay(
  input wire control_clk,video_clk,input wire [90:0] control_state,
  input wire [34:0] subtitle_command,output wire subtitle_ack,
+ output wire [13:0] metadata_address,input wire [7:0] metadata_data,
+ input wire metadata_valid,metadata_artwork_valid,metadata_title_long,
+ input wire [6:0] metadata_track_count,metadata_current_track,
  input wire [23:0] rgb,input wire hs,vs,de,
  input wire layout_de,
  output wire [23:0] rgb_out,output wire hs_out,vs_out,de_out
@@ -16,6 +19,20 @@ wire scene_ce=scene_phase==0;
 wire [90:0] state_hdmi;
 video_config_cdc #(.WIDTH(91)) player_ui_config(
  .src_clk(control_clk),.dst_clk(video_clk),.src_data(control_state),.dst_data(state_hdmi));
+wire [16:0] metadata_video;
+video_config_cdc #(.WIDTH(17)) player_metadata_config(
+ .src_clk(control_clk),.dst_clk(video_clk),
+ .src_data({metadata_valid,metadata_artwork_valid,metadata_title_long,metadata_track_count,metadata_current_track}),
+ .dst_data(metadata_video));
+wire [23:0] album_rgb;
+wire album_hs,album_vs,album_de;
+media_flac_album_ui album_ui(
+ .clk(video_clk),.enabled(state_hdmi[72]),
+ .metadata_valid(metadata_video[16]),.artwork_valid(metadata_video[15]),.current_title_long(metadata_video[14]),
+ .track_count(metadata_video[13:7]),.current_track(metadata_video[6:0]),
+ .metadata_address(metadata_address),.metadata_data(metadata_data),
+ .rgb(rgb),.hs(hs),.vs(vs),.de(de),.layout_de(layout_de),
+ .rgb_out(album_rgb),.hs_out(album_hs),.vs_out(album_vs),.de_out(album_de));
 wire text_we,object_we,commit,pending,acknowledged;
 wire [8:0] text_addr;
 wire [7:0] text_data;
@@ -43,7 +60,7 @@ media_ui_scene scene(
  .aux_commit(subtitle_commit),.aux_epoch(subtitle_epoch),.aux_visible(subtitle_visible),
  .aux_auto_layout(1'b1),.aux_length0(subtitle_length0),.aux_length1(subtitle_length1));
 media_overlay_compositor compositor(
- .clk(video_clk),.rgb(rgb),.hs(hs),.vs(vs),.de(de),.layout_de(layout_de),.current_epoch(state_hdmi[90:75]),
+ .clk(video_clk),.rgb(album_rgb),.hs(album_hs),.vs(album_vs),.de(album_de),.layout_de(album_de),.current_epoch(state_hdmi[90:75]),
  .text_we(text_we),.text_addr(text_addr),.text_data(text_data),
  .object_we(object_we),.object_addr(object_addr),.object_data(object_data),
  .commit(commit),.commit_epoch(epoch),.commit_groups(groups),.commit_scale(scale),

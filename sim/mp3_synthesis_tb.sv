@@ -9,6 +9,7 @@ module mp3_synthesis_tb;
 parameter HEX_FILE = "";
 parameter NUM_FRAMES = 2;
 parameter BUF_LOG2 = 11;
+parameter PROFILE = 0;
 
 reg clk = 0;
 reg reset = 1;
@@ -214,14 +215,21 @@ initial begin
 end
 
 integer frame_count = 0;
+integer cycle_count = 0;
+integer last_frame_cycle = 0;
+integer huff_busy_cycles = 0, imdct_busy_cycles = 0, synth_busy_cycles = 0;
 integer synth_count [0:3];
 initial begin
     synth_count[0] = 0; synth_count[1] = 0; synth_count[2] = 0; synth_count[3] = 0;
 end
 
 always @(posedge clk) begin
+    cycle_count <= cycle_count + 1;
+    if (huff.state != 0) huff_busy_cycles <= huff_busy_cycles + 1;
+    if (imdct_dut.state != 0 || imdct_dut.q_count != 0) imdct_busy_cycles <= imdct_busy_cycles + 1;
+    if (synth_dut.state != 0 || synth_dut.q_count != 0) synth_busy_cycles <= synth_busy_cycles + 1;
     if (out_valid) begin
-        $display("PCM gci=%0d idx=%0d data=%0d", out_gci, synth_count[out_gci], out_data);
+        if (!PROFILE) $display("PCM gci=%0d idx=%0d data=%0d", out_gci, synth_count[out_gci], out_data);
         if (synth_count[out_gci] == 575) begin
             $display("PCMDONE gci=%0d", out_gci);
             synth_count[out_gci] <= 0;
@@ -232,6 +240,12 @@ always @(posedge clk) begin
     if (frame_done) begin
         frame_count <= frame_count + 1;
         $display("FRAMEDONE %0d", frame_count + 1);
+        if (PROFILE) begin
+            $display("PROFILE frame=%0d cycle=%0d interval=%0d huff_busy=%0d imdct_busy=%0d synth_busy=%0d",
+                frame_count + 1, cycle_count, cycle_count-last_frame_cycle,
+                huff_busy_cycles, imdct_busy_cycles, synth_busy_cycles);
+            last_frame_cycle <= cycle_count;
+        end
     end
 end
 
@@ -253,7 +267,8 @@ end
 // since it doesn't affect correctness, only wasted wall-clock time.
 always @(posedge clk) begin
     if (frame_done && frame_count >= NUM_FRAMES - 1) begin
-        #60000000 $finish;
+        if (PROFILE) #1000 $finish;
+        else #60000000 $finish;
     end
 end
 

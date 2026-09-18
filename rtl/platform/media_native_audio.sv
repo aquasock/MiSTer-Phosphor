@@ -80,16 +80,42 @@ module media_native_audio(
  dcfifo #(.lpm_numwords(4096),.lpm_showahead("ON"),.lpm_type("dcfifo"),.lpm_width(33),.lpm_widthu(12),
   .overflow_checking("ON"),.underflow_checking("ON"),.use_eab("ON"),.rdsync_delaypipe(4),.wrsync_delaypipe(4),
   .write_aclr_synch("ON"),.read_aclr_synch("ON")) pcm_fifo(
-  .aclr(fifo_reset),.data(pcm_data),.wrclk(wr_clk),.wrreq(pcm_valid&&pcm_ready),.wrfull(fifo_full),
+ .aclr(fifo_reset),.data(pcm_data),.wrclk(wr_clk),.wrreq(pcm_valid&&pcm_ready),.wrfull(fifo_full),
   .q(fifo_q),.rdclk(cd_clock),.rdreq(sink_ready&&!fifo_empty),.rdempty(fifo_empty));
+
+ // Vorbis produces PCM faster than real time on average, but in sizeable
+ // transform bursts with gaps of roughly 22 ms.  Starting the sink on the
+ // first token therefore underruns an otherwise ample FIFO.  Prefill half of
+ // the existing 4096-token FIFO (46.4 ms at 44.1 kHz) before the first output
+ // tick.  EOF bypasses the threshold so short WAV/FLAC files still start.
+ reg eof_queued=0,prefill_done=0;reg[11:0] prefill_count=0;reg[2:0] eof_sync=0,prefill_sync=0;
+ always @(posedge wr_clk or posedge fifo_reset)
+  if(fifo_reset)begin eof_queued<=0;prefill_done<=0;prefill_count<=0;end
+  else if(pcm_valid&&pcm_ready)begin
+   if(pcm_data[32])eof_queued<=1;
+   // Once bit 11 has become set, at least 2048 tokens are already queued.
+   // Latch a one-bit indication for the CDC instead of exporting dcfifo's
+   // long binary rdusedw conversion into the audio-clock timing path.
+   if(!prefill_done)begin
+    // Begin with 3584 of the 4096 entries queued.  The larger reservoir
+    // absorbs locally expensive Vorbis packets while leaving headroom for
+    // writes crossing the clock boundary as playback starts.
+    if(prefill_count>=12'd3583)prefill_done<=1;
+    else prefill_count<=prefill_count+1'b1;
+   end
+  end
+ always @(posedge cd_clock or posedge fifo_reset)
+  if(fifo_reset)begin eof_sync<=0;prefill_sync<=0;end
+  else begin eof_sync<={eof_sync[1:0],eof_queued};prefill_sync<={prefill_sync[1:0],prefill_done};end
  reg started=0;
- always @(posedge cd_clock)if(rd_reset_sync[2])started<=0;else started<=1;
+ wire sink_start=!started&&!rd_reset_sync[2]&&(prefill_sync[2]||eof_sync[2]);
+ always @(posedge cd_clock)if(rd_reset_sync[2])started<=0;else if(sink_start)started<=1;
  wire signed[15:0] source_left=fifo_q[31:16],source_right=fifo_q[15:0];
  wire signed[15:0] scaled_left=cfg_cd[4]?16'sd0:source_left>>>cfg_cd[3:0];
  wire signed[15:0] scaled_right=cfg_cd[4]?16'sd0:source_right>>>cfg_cd[3:0];
  wire cd_bclk,cd_lrclk,cd_data,cd_spdif,cd_dac_l,cd_dac_r,sink_finished,sink_error;
  wire signed[15:0] cd_left,cd_right;
- media_pcm_i2s sink(.clk(cd_clock),.reset(rd_reset_sync[2]),.cancel(1'b0),.start(!started&&!rd_reset_sync[2]),
+ media_pcm_i2s sink(.clk(cd_clock),.reset(rd_reset_sync[2]),.cancel(1'b0),.start(sink_start),
   .paused(cfg_cd[6]||!cfg_cd[7]||!ready_cd[0]),.start_position(36'd0),
   .input_valid(!fifo_empty),.input_eof(fifo_q[32]),.input_left(scaled_left),.input_right(scaled_right),.input_ready(sink_ready),
   .i2s_bclk(cd_bclk),.i2s_lrclk(cd_lrclk),.i2s_data(cd_data),.position(position),.finished(sink_finished),.error(sink_error),

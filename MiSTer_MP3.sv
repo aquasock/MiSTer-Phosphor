@@ -120,7 +120,7 @@ localparam CONF_STR = {
 	// means "match anything starting with these first two letters" on the
 	// MiSTer Main/ARM side -- the same trick MiSTer-Phosphor's own CONF_STR
 	// already uses ("MPGFL*" = "MPG" + "FL*") for this identical problem.
-	"S0,MP3WAVFL*,Load Audio;",
+	"S0,MP3WAVFL*OGG,Load Audio;",
 	"O[123:122],Visualizer,Waveforms,FFT,O-Scope;",
 	"O[121],Aspect ratio,Standard,Widescreen;",
 	"-;",
@@ -264,7 +264,7 @@ media_file_reader media_file_reader
 	.idle(reader_idle), .byte_position(), .requests(), .completions(), .max_wait(), .error()
 );
 
-///////// Format dispatch: sniff the first 4 bytes to pick MP3/WAV/FLAC /////////
+///////// Format dispatch: sniff the first 4 bytes to pick MP3/WAV/FLAC/Ogg /////////
 // Content-sniffed, not extension-based, mirroring MiSTer-Phosphor's own
 // media_duration_probe.sv, which tells its FLAC path apart from its movie
 // path the same way rather than using separate OSD entries.
@@ -276,7 +276,7 @@ media_file_reader media_file_reader
 // needs to see its own file starting at byte 0 (wav_decoder's RIFF walk
 // and flac_stream_decoder's own "fLaC" magic check both included), so the
 // sniffed bytes can't simply be discarded.
-localparam FMT_MP3 = 2'd0, FMT_WAV = 2'd1, FMT_FLAC = 2'd2;
+localparam FMT_MP3 = 2'd0, FMT_WAV = 2'd1, FMT_FLAC = 2'd2, FMT_OGG = 2'd3;
 reg [1:0] format_mode;
 reg [7:0] sniff_buf [0:3];
 reg [2:0] sniff_count;    // 0..4, saturates: real bytes captured so far
@@ -293,6 +293,7 @@ wire format_committed = !sniffing;
 wire active_input_ready = mp3_active  ? input_ready :
                            wav_active  ? wav_input_ready :
                            flac_active ? flac_input_ready :
+                           ogg_active  ? ogg_input_ready :
                            1'b0;
 
 always @(posedge clk_sys) begin
@@ -314,6 +315,9 @@ always @(posedge clk_sys) begin
 				else if (sniff_buf[0] == 8'h66 && sniff_buf[1] == 8'h4C &&
 				         sniff_buf[2] == 8'h61 && stream_data[7:0] == 8'h43)
 					format_mode <= FMT_FLAC;
+				else if (sniff_buf[0] == 8'h4F && sniff_buf[1] == 8'h67 &&
+				         sniff_buf[2] == 8'h67 && stream_data[7:0] == 8'h53)
+					format_mode <= FMT_OGG;
 				else
 					format_mode <= FMT_MP3;
 			end
@@ -346,6 +350,7 @@ wire       decoder_stream_eof   = format_committed && !replaying && stream_data[
 wire mp3_active  = format_committed && (format_mode == FMT_MP3);
 wire wav_active  = format_committed && (format_mode == FMT_WAV);
 wire flac_active = format_committed && (format_mode == FMT_FLAC);
+wire ogg_active  = format_committed && (format_mode == FMT_OGG);
 
 ///////// MP3 decode chain (identical wiring to sim/mp3_synthesis_tb.sv) /////////
 wire frame_valid, stereo;
@@ -607,7 +612,7 @@ assign PLAYER_CORE_PCM_TICK = pcm_fifo_rd;
 assign AUDIO_S = 1'b1;
 assign AUDIO_MIX = 2'd0;
 
-///////// WAV + FLAC decoders, sharing the native-audio rail /////////
+///////// WAV + FLAC + Vorbis decoders, sharing the native-audio rail /////////
 // This rail is genuinely separate from MP3's own path above, not a
 // compromise: media_native_audio (already part of this project's reused
 // sys/ framework, previously wired up but left completely inert) is fixed
@@ -618,6 +623,21 @@ assign AUDIO_MIX = 2'd0;
 // own AUDIO_L/AUDIO_R into media_native_audio's "movie" input and mixes
 // movie-vs-cd audio to the real output pins based on PLAYER_MUSIC -- no
 // separate output mux needed here, just driving these ports correctly.
+wire ogg_input_ready, ogg_pcm_valid, ogg_decoder_ready, ogg_error;
+wire signed [31:0] ogg_pcm_left_q31, ogg_pcm_right_q31;
+wire [31:0] ogg_sample_rate;
+wire ogg_input_valid = ogg_active && decoder_stream_valid;
+wire ogg_stream_ready = decoder_stream_eof ? 1'b1 : ogg_input_ready;
+
+vorbis_stream_decoder ogg_decoder
+(
+	.clk(clk_sys), .reset(decoder_reset || !ogg_active),
+	.byte_valid(ogg_input_valid), .byte_data(decoder_stream_data), .byte_ready(ogg_input_ready),
+	.pcm_valid(ogg_pcm_valid), .pcm_ready(PLAYER_PCM_READY),
+	.pcm_left(ogg_pcm_left_q31), .pcm_right(ogg_pcm_right_q31),
+	.sample_rate(ogg_sample_rate), .ready(ogg_decoder_ready), .error(ogg_error)
+);
+
 wire wav_input_ready;
 wire wav_pcm_valid, wav_pcm_eof;
 wire signed [15:0] wav_pcm_left, wav_pcm_right;
@@ -822,6 +842,14 @@ media_keyboard_control #(.RESTART_BOTH_DIRECTIONS(1), .ENABLE_SEEK_GATE(1)) tran
 	.seek_target_q(transport_target_q), .restart(transport_restart)
 );
 
+wire album_ui_visible;
+media_album_ui_toggle album_ui_keys
+(
+	.clk(clk_sys), .reset(reset), .new_file(new_file),
+	.enabled(transport_loaded), .osd_open(album_osd_sync[2]),
+	.key(ps2_key), .visible(album_ui_visible)
+);
+
 assign PLAYER_UI_CLOCK = clk_sys;
 media_ui_state #(.CLOCK_HZ(20000000)) player_ui_state
 (
@@ -832,12 +860,36 @@ media_ui_state #(.CLOCK_HZ(20000000)) player_ui_state
 	.elapsed_q(music_elapsed_q), .target_q(transport_target_q),
 	.duration_q(music_duration_q), .duration_valid(album_total != 0),
 	.music_mode(1'b1), .track_changed(album_track_changed),
+	.album_ui_visible(album_ui_visible),
 	.track_valid(album_track_valid && track_times_valid),
 	.track_elapsed_q(track_elapsed_q), .track_duration_q(track_duration_q),
 	.track_origin_q(track_origin_q), .album_duration_known(album_duration_known),
 	.scene_state(PLAYER_UI_STATE)
 );
 assign PLAYER_MUSIC_PAUSED = transport_paused || (flac_active && flac_prefilling);
+
+// Navigation temporarily invalidates the cue-table observer while it seeks.
+// Keep the last published track on screen until the observer identifies the
+// destination; exposing zero makes the renderer fall back to track 1.
+reg [6:0] album_ui_track = 0;
+always @(posedge clk_sys) begin
+	if (reset || new_file || !flac_active)
+		album_ui_track <= 0;
+	else if (album_track_valid)
+		album_ui_track <= album_track_number;
+end
+
+flac_album_metadata album_metadata
+(
+	.write_clk(clk_sys), .reset(reset), .new_file(new_file), .enabled(flac_active),
+	.byte_valid(flac_input_valid && flac_input_ready), .byte_data(decoder_stream_data),
+	.read_clk(PLAYER_META_CLOCK), .read_address(PLAYER_META_ADDRESS),
+	.current_track(album_ui_track),
+	.read_data(PLAYER_META_DATA), .valid(PLAYER_META_VALID),
+	.artwork_valid(PLAYER_META_ARTWORK_VALID),
+	.track_count(PLAYER_META_TRACK_COUNT), .current_title_long(PLAYER_META_TITLE_LONG)
+);
+assign PLAYER_META_CURRENT_TRACK = album_ui_track;
 
 flac_album_control album_control
 (
@@ -861,19 +913,39 @@ assign stream_ready = sniffing   ? 1'b1 :
                        mp3_active  ? mp3_stream_ready :
                        wav_active  ? wav_stream_ready :
                        flac_active ? flac_stream_ready :
+                       ogg_active  ? ogg_stream_ready :
                        1'b0;
 
-assign PLAYER_MUSIC = wav_active || flac_active;
+assign PLAYER_MUSIC = wav_active || flac_active || ogg_active;
 // Held whenever neither WAV nor FLAC is the active format (sniffing/
 // replaying/MP3 all included), mirroring MiSTer-Phosphor's own
 // `reset_mpeg2 || !media_music_mode` pattern for this same signal -- keeps
 // the CD-audio-side FIFO/CDC logic cleanly drained while unused, not just
 // reset for one cycle on new_file.
-assign PLAYER_PCM_RESET = decoder_reset || (flac_restarting && !album_loop_pending) || !(wav_active || flac_active);
+assign PLAYER_PCM_RESET = decoder_reset || (flac_restarting && !album_loop_pending) || !(wav_active || flac_active || ogg_active);
 assign PLAYER_PCM_VALID = wav_active ? wav_pcm_valid :
-	flac_active ? (flac_landing_valid && !(transport_loaded && flac_landing_eof)) : 1'b0;
+	flac_active ? (flac_landing_valid && !(transport_loaded && flac_landing_eof)) :
+	ogg_active ? ogg_pcm_valid : 1'b0;
+
+// The synthesis pipeline output is approximately twice PCM16 amplitude; one
+// guard-bit shift places its RMS level within 0.2 dB of the reference decoder.
+// Saturate exceptional peaks instead of allowing them to wrap into clicks.
+function automatic signed [15:0] ogg_to_pcm16(input signed [31:0] sample);
+	reg signed [31:0] scaled;
+	begin
+		scaled = sample >>> 1;
+		if (scaled > 32'sd32767)
+			ogg_to_pcm16 = 16'sh7fff;
+		else if (scaled < -32'sd32768)
+			ogg_to_pcm16 = 16'sh8000;
+		else
+			ogg_to_pcm16 = scaled[15:0];
+	end
+endfunction
+
 assign PLAYER_PCM_DATA  = wav_active  ? {wav_pcm_eof, wav_pcm_left, wav_pcm_right} :
                            flac_active ? {flac_landing_eof, flac_landing_pcm} :
+                           ogg_active ? {1'b0, ogg_to_pcm16(ogg_pcm_left_q31), ogg_to_pcm16(ogg_pcm_right_q31)} :
                            33'd0;
 
 ///////// Minimal blanked video, purely to host the OSD /////////

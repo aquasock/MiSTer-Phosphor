@@ -42,7 +42,7 @@ def parse_sim_output(text: str) -> list:
     frames = []
     cur = None
     for line in text.splitlines():
-        m = re.match(r"FRAME idx=(\d+) stereo=(\d) channel_mode=(\d) mode_extension=(\d) frame_len=(\d+) main_data_begin=(\d+)", line)
+        m = re.match(r"FRAME idx=(\d+)(?: byte_offset=\d+)? stereo=(\d) channel_mode=(\d) mode_extension=(\d) frame_len=(\d+) main_data_begin=(\d+)", line)
         if m:
             if cur is not None:
                 frames.append(cur)

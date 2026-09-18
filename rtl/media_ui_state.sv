@@ -5,7 +5,7 @@ module media_ui_state #(parameter integer CLOCK_HZ=20000000)(
  input wire clk,reset,new_file,loaded,paused,seeking,
  input wire [34:0] elapsed_q,target_q,duration_q,
  input wire duration_valid,
- input wire music_mode,track_changed,track_valid,
+ input wire music_mode,track_changed,track_valid,album_ui_visible,
  input wire [34:0] track_elapsed_q,track_duration_q,track_origin_q,
  output wire album_duration_known,
  output wire [90:0] scene_state
@@ -33,8 +33,8 @@ wire [34:0] track_preview=relative_target>track_duration_q?track_duration_q:rela
 wire display_known=known&&(!track_phase||track_valid||seeking);
 wire [34:0] display_duration=track_phase?track_duration_q:duration_q;
 wire [34:0] display_elapsed=track_phase?(seeking?track_preview:track_elapsed_q):(seeking?target_q:elapsed_q);
-// Bits 72:71 are reserved after removal of playback-status labels.
-assign scene_state={session,loaded,loaded&&(seeking||hide_count!=0),2'b00,display_known,
+// Bit 72 carries the manually toggled album UI; bit 71 remains reserved.
+assign scene_state={session,loaded,loaded&&(seeking||hide_count!=0),album_ui_visible,1'b0,display_known,
  display_duration,display_elapsed};
 always @(posedge clk) begin
  paused_d<=paused;seeking_d<=seeking;loaded_d<=loaded;target_d<=target_q;

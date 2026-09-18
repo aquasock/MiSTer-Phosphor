@@ -1241,14 +1241,12 @@ cyclonev_hps_interface_peripheral_i2c hdmi_i2c
 
 	wire [23:0] hdmi_data_player;
 	wire hdmi_hs_player,hdmi_vs_player,hdmi_de_player;
-	// Visualizers are composed on the core raster before the HDMI/analog
-	// split below.  This HDMI-side block is now only the (currently stubbed)
-	// player overlay, preventing a second visualization pass after ASCAL.
-	media_player_overlay player_overlay(
-	 .control_clk(player_ui_clock),.video_clk(clk_hdmi),.control_state(player_ui_state),
-	 .subtitle_command(player_subtitle_command),.subtitle_ack(player_subtitle_ack),
-	 .rgb(hdmi_data_mask),.hs(hdmi_hs_mask),.vs(hdmi_vs_mask),.de(hdmi_de_mask),.layout_de(hdmi_de_mask&&!hdmi_brd_mask),
-	 .rgb_out(hdmi_data_player),.hs_out(hdmi_hs_player),.vs_out(hdmi_vs_player),.de_out(hdmi_de_player));
+	// Player UI is already composed into the native raster below so HDMI and
+	// direct analog receive identical content.
+	assign hdmi_data_player=hdmi_data_mask;
+	assign hdmi_hs_player=hdmi_hs_mask;
+	assign hdmi_vs_player=hdmi_vs_mask;
+	assign hdmi_de_player=hdmi_de_mask;
 
 	osd hdmi_osd
 	(
@@ -1645,6 +1643,10 @@ assign SDCD_SPDIF = (mcp_en & ~spdif) ? 1'b0 : 1'bZ;
 
 wire native_scl_low,native_sda_low,native_hps_scl,native_hps_sda;
 wire [1:0] player_visualizer;
+wire [13:0] player_meta_address;
+wire [7:0] player_meta_data;
+wire player_meta_valid,player_meta_artwork_valid,player_meta_title_long;
+wire [6:0] player_meta_track_count,player_meta_current_track;
 wire core_pcm_active,core_pcm_tick;
 wire music_request,music_paused,music_pcm_reset,music_pcm_valid,music_pcm_ready;
 wire [32:0] music_pcm_data;
@@ -1833,11 +1835,23 @@ sync_fix sync_h(clk_vid, hs_emu, hs_fix);
 
 // Render once in the native core raster. Both ASCAL/HDMI and the direct
 // analog path consume these latency-matched outputs.
+wire [23:0] visual_rgb;
+wire visual_hs,visual_vs,visual_de;
 media_audio_visualizers core_visualizer(
 	.control_clk(player_ui_clock),.select_visualizer(player_visualizer),
 	.audio_clk(clk_sys),.video_clk(clk_vid),.audio_active(selected_visual_active),.sample_tick(selected_visual_tick),
 	.sample_left(selected_visual_left),.sample_right(selected_visual_right),
 	.rgb({core_r_out,core_g_out,core_b_out}),.hs(core_hs_emu),.vs(core_vs_emu),.de(core_de_emu),.layout_de(core_de_emu),
+	.rgb_out(visual_rgb),.hs_out(visual_hs),.vs_out(visual_vs),.de_out(visual_de));
+
+media_player_overlay player_overlay(
+	.control_clk(player_ui_clock),.video_clk(clk_vid),.control_state(player_ui_state),
+	.subtitle_command(player_subtitle_command),.subtitle_ack(player_subtitle_ack),
+	.metadata_address(player_meta_address),.metadata_data(player_meta_data),
+	.metadata_valid(player_meta_valid),.metadata_track_count(player_meta_track_count),.metadata_current_track(player_meta_current_track),
+	.metadata_artwork_valid(player_meta_artwork_valid),
+	.metadata_title_long(player_meta_title_long),
+	.rgb(visual_rgb),.hs(visual_hs),.vs(visual_vs),.de(visual_de),.layout_de(visual_de),
 	.rgb_out({r_out,g_out,b_out}),.hs_out(hs_emu),.vs_out(vs_emu),.de_out(de_emu));
 
 wire  [6:0] user_out, user_in;
@@ -1920,6 +1934,11 @@ emu emu
 	.PLAYER_UI_STATE(player_ui_state),
 	.PLAYER_SUBTITLE_COMMAND(player_subtitle_command),
 	.PLAYER_SUBTITLE_ACK(player_subtitle_ack),
+	.PLAYER_META_CLOCK(clk_vid),.PLAYER_META_ADDRESS(player_meta_address),.PLAYER_META_DATA(player_meta_data),
+	.PLAYER_META_VALID(player_meta_valid),.PLAYER_META_TRACK_COUNT(player_meta_track_count),
+	.PLAYER_META_ARTWORK_VALID(player_meta_artwork_valid),
+	.PLAYER_META_TITLE_LONG(player_meta_title_long),
+	.PLAYER_META_CURRENT_TRACK(player_meta_current_track),
 	.HDMI_BLACKOUT(hdmi_blackout),
 	.HDMI_BOB_DEINT(bob_deint),
 

@@ -49,8 +49,8 @@ end
 always @(posedge clk) begin
     if (frame_valid) begin
         frame_count = frame_count + 1;
-        $display("FRAME idx=%0d stereo=%0d channel_mode=%0d mode_extension=%0d frame_len=%0d main_data_begin=%0d",
-                  frame_count, stereo, channel_mode, mode_extension, frame_len, main_data_begin);
+        $display("FRAME idx=%0d byte_offset=%0d stereo=%0d channel_mode=%0d mode_extension=%0d frame_len=%0d main_data_begin=%0d",
+                  frame_count, idx, stereo, channel_mode, mode_extension, frame_len, main_data_begin);
         for (k = 0; k < (stereo ? 8 : 4); k = k + 1)
             $write("  scfsi[%0d][%0d]=%0d", k[2], k[1:0], dut.scfsi[k[2]][k[1:0]]);
         $write("\n");

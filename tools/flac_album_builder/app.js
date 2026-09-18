@@ -4,9 +4,11 @@
   const state={tracks:[],output:null,outputUrl:null,busy:false};
   const $=id=>document.getElementById(id);
   const ui={drop:$("drop"),choose:$("choose"),files:$("files"),tracks:$("tracks"),summary:$("summary"),
-    clear:$("clear"),build:$("build"),download:$("download"),name:$("name"),circular:$("circular"),trimMode:$("trim-mode"),
+    clear:$("clear"),build:$("build"),download:$("download"),name:$("name"),
     compression:$("compression"),progress:$("progress"),status:$("status")};
   const readU24=(a,o)=>(a[o]<<16)|(a[o+1]<<8)|a[o+2];
+  const readU32LE=(a,o)=>(a[o]|(a[o+1]<<8)|(a[o+2]<<16)|(a[o+3]<<24))>>>0;
+  const readU32BE=(a,o)=>((a[o]<<24)|(a[o+1]<<16)|(a[o+2]<<8)|a[o+3])>>>0;
   function readU64(a,o){let n=0n;for(let i=0;i<8;i++)n=(n<<8n)|BigInt(a[o+i]);return n}
   function writeU64(a,o,n){n=BigInt(n);for(let i=7;i>=0;i--){a[o+i]=Number(n&255n);n>>=8n}}
   function metadataEnd(bytes){
@@ -16,6 +18,21 @@
       lastHeader=o;last=!!(bytes[o]&128);const len=readU24(bytes,o+1);o+=4+len;
       if(o>bytes.length)throw Error("Truncated FLAC metadata block.");}
     return{audio:o,lastHeader};
+  }
+  function sourceMetadata(bytes){
+    const decoder=new TextDecoder("utf-8"),tags={},pictures=[];let o=4,last=false;
+    while(!last){last=!!(bytes[o]&128);const type=bytes[o]&127,len=readU24(bytes,o+1),data=o+4,end=data+len;
+      if(type===4&&len>=8){let p=data,vendor=readU32LE(bytes,p);p+=4+vendor;if(p+4<=end){const count=readU32LE(bytes,p);p+=4;
+        for(let i=0;i<count&&p+4<=end;i++){const n=readU32LE(bytes,p);p+=4;if(p+n>end)break;const item=decoder.decode(bytes.subarray(p,p+n)),eq=item.indexOf("=");p+=n;
+          if(eq>0){const key=item.slice(0,eq).toLowerCase();if(tags[key]===undefined)tags[key]=item.slice(eq+1)}}}}
+      if(type===6&&len>=32){let p=data;const pictureType=readU32BE(bytes,p);p+=4;const mimeLen=readU32BE(bytes,p);p+=4;
+        if(p+mimeLen+4<=end){const mime=decoder.decode(bytes.subarray(p,p+mimeLen));p+=mimeLen;const descLen=readU32BE(bytes,p);p+=4+descLen;
+          if(p+20<=end){const width=readU32BE(bytes,p),height=readU32BE(bytes,p+4);p+=16;const dataLen=readU32BE(bytes,p);p+=4;
+            if(p+dataLen<=end&&mime.startsWith("image/"))pictures.push({pictureType,mime,width,height,data:bytes.slice(p,p+dataLen)})}}}
+      o=end;
+    }
+    pictures.sort((a,b)=>(a.pictureType===3?0:1)-(b.pictureType===3?0:1));
+    return{tags,picture:pictures[0]||null};
   }
   function inspect(bytes){
     const end=metadataEnd(bytes),type=bytes[4]&127,len=readU24(bytes,5);
@@ -27,7 +44,7 @@
       throw Error("Needs 44.1 kHz / 16-bit / stereo; found "+sampleRate+" Hz / "+bits+"-bit / "+channels+"ch.");
     if(!samples)throw Error("STREAMINFO does not contain a total sample count.");
     if(samples%CD_FRAME)throw Error("Length is not CD-sector aligned (remainder "+(samples%CD_FRAME)+" of 588 samples).");
-    return{samples:samples,duration:samples/RATE,audioOffset:end.audio};
+    return{samples:samples,duration:samples/RATE,audioOffset:end.audio,...sourceMetadata(bytes)};
   }
   function time(seconds){const s=Math.round(seconds),h=Math.floor(s/3600),m=Math.floor(s%3600/60);
     return(h?String(h)+":":"")+String(m).padStart(h?2:1,"0")+":"+String(s%60).padStart(2,"0")}
@@ -40,8 +57,9 @@
     state.tracks.forEach((track,index)=>{
       const li=document.createElement("li");li.className="track"+(track.error?" error":"");
       const body=document.createElement("div"),name=document.createElement("span"),meta=document.createElement("span");
-      name.className="track-name";name.textContent=track.file.name;meta.className="track-meta";
-      meta.textContent=track.error||(time(track.duration)+" · "+size(track.file.size)+" · "+track.samples.toLocaleString()+" samples");
+      name.className="track-name";name.textContent=(track.tags&&track.tags.title)||track.file.name;meta.className="track-meta";
+      const credit=track.tags&&track.tags.artist?track.tags.artist+" · ":"";
+      meta.textContent=track.error||(credit+time(track.duration)+" · "+size(track.file.size)+" · "+track.samples.toLocaleString()+" samples");
       body.append(name,meta);const controls=document.createElement("div");controls.className="track-controls";
       [["↑",-1],["↓",1]].forEach(pair=>{const b=document.createElement("button");b.textContent=pair[0];
         b.title=pair[1]<0?"Move up":"Move down";b.disabled=state.busy||(pair[1]<0?index===0:index===state.tracks.length-1);
@@ -54,7 +72,6 @@
     const seconds=state.tracks.reduce((n,t)=>n+(t.duration||0),0);
     ui.summary.textContent=state.tracks.length?(state.tracks.length+" track"+(state.tracks.length===1?"":"s")+" · "+time(seconds)+" total"):"No tracks added.";
     ui.build.disabled=state.busy||!valid;ui.clear.disabled=state.busy||!state.tracks.length;
-    ui.circular.disabled=state.busy;ui.trimMode.disabled=state.busy||!ui.circular.checked;
     ui.name.disabled=state.busy;ui.compression.disabled=state.busy;
   }
   async function add(files){
@@ -87,16 +104,6 @@
     const finish=Flac.FLAC__stream_decoder_finish(id);Flac.FLAC__stream_decoder_delete(id);
     if(failed)throw failed;if(!ok||!finish)throw Error("FLAC decoding did not finish cleanly.");
   }
-  function edgeAnalysis(bytes){let leading=0,trailing=0,seenNonzero=false,total=0,energy=0,sectorSamples=0;const sectors=[];
-    decode(bytes,(pcm,samples)=>{for(let i=0;i<samples;i++){const zero=pcm[i*2]===0&&pcm[i*2+1]===0;
-        if(zero){if(!seenNonzero)leading++;trailing++;}else{seenNonzero=true;trailing=0;}
-        energy+=pcm[i*2]*pcm[i*2]+pcm[i*2+1]*pcm[i*2+1];sectorSamples++;total++;
-        if(sectorSamples===CD_FRAME){sectors.push(energy/(CD_FRAME*CHANNELS));energy=0;sectorSamples=0;}}
-      return true});
-    const quietLimit=Math.pow(32768*Math.pow(10,-50/20),2);let leadingQuiet=0,trailingQuiet=0;
-    for(const rms2 of sectors){if(rms2>quietLimit)break;leadingQuiet+=CD_FRAME;}
-    for(let i=sectors.length-1;i>=0;i--){if(sectors[i]>quietLimit)break;trailingQuiet+=CD_FRAME;}
-    return{leading,trailing,leadingQuiet,trailingQuiet,total};}
   function block(type,data,last=false){const out=new Uint8Array(4+data.length);out[0]=(last?128:0)|type;
     out[1]=(data.length>>>16)&255;out[2]=(data.length>>>8)&255;out[3]=data.length&255;out.set(data,4);return out}
   function cueSheet(starts,total){const data=new Uint8Array(396+starts.length*48+36);data[136]=128;data[395]=starts.length+1;let o=396;
@@ -107,25 +114,37 @@
     const data=new Uint8Array(chosen.length*18);let o=0;chosen.forEach(f=>{writeU64(data,o,f.sample);writeU64(data,o+8,f.offset-audioOffset);
       data[o+16]=(f.samples>>>8)&255;data[o+17]=f.samples&255;o+=18});return data}
   function join(chunks,total){const out=new Uint8Array(total);let o=0;for(const c of chunks){out.set(c,o);o+=c.length}return out}
-  function injectMetadata(encoded,frames,starts,total){const parsed=metadataEnd(encoded),prefix=encoded.slice(0,parsed.audio);
-    prefix[parsed.lastHeader]&=127;const seeks=block(3,seekTable(frames,parsed.audio)),cue=block(5,cueSheet(starts,total),true);
-    return join([prefix,seeks,cue,encoded.subarray(parsed.audio)],prefix.length+seeks.length+cue.length+encoded.length-parsed.audio)}
+  function cleanText(value){return String(value||"")
+    .replace(/[\u2018\u2019\u201a\u201b]/g,"'").replace(/[\u201c\u201d\u201e\u201f]/g,'"')
+    .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...")
+    .replace(/[\u0000-\u001f\u007f-\uffff]/g," ").trim()}
+  function displayText(value,length){const text=cleanText(value);return text.length>length?text.slice(0,length-3)+"...":text}
+  function putText(out,offset,value,length){const bytes=new TextEncoder().encode(cleanText(value));out.set(bytes.subarray(0,length),offset)}
+  async function artwork(picture){
+    const pixels=new Uint8Array(92*92);if(!picture)return{pixels,valid:false};
+    try{const image=await createImageBitmap(new Blob([picture.data],{type:picture.mime})),canvas=document.createElement("canvas");canvas.width=92;canvas.height=92;
+      const ctx=canvas.getContext("2d",{alpha:false});ctx.fillStyle="#000";ctx.fillRect(0,0,92,92);
+      const scale=Math.min(92/image.width,92/image.height),w=Math.max(1,Math.round(image.width*scale)),h=Math.max(1,Math.round(image.height*scale));
+      ctx.drawImage(image,(92-w)>>1,(92-h)>>1,w,h);image.close();const rgba=ctx.getImageData(0,0,92,92).data;
+      for(let i=0;i<pixels.length;i++)pixels[i]=(rgba[i*4]&0xe0)|((rgba[i*4+1]>>3)&0x1c)|(rgba[i*4+2]>>6);
+      return{pixels,valid:true};
+    }catch(error){console.warn("Cover art could not be converted",error);return{pixels,valid:false}}
+  }
+  function albumApplication(tracks,art){const data=new Uint8Array(11704);data.set([77,80,51,65,1,tracks.length,art.valid?1:0,0]);
+    const first=(key)=>tracks.map(t=>t.tags&&t.tags[key]).find(Boolean)||"";
+    putText(data,8,displayText(first("album")||"Untitled Album",15),15);
+    putText(data,40,displayText(first("albumartist")||first("artist")||"Unknown Artist",15),15);
+    tracks.forEach((track,i)=>{const title=cleanText((track.tags&&track.tags.title)||track.file.name.replace(/\.flac$/i,""))||"UNTITLED";
+      putText(data,72+i*32,displayText(title,24),24);data[72+i*32+31]=title.length>15?1:0});
+    data.set(art.pixels,3240);return data}
+  function injectMetadata(encoded,frames,starts,total,application){const parsed=metadataEnd(encoded),prefix=encoded.slice(0,parsed.audio);
+    prefix[parsed.lastHeader]&=127;const seeks=block(3,seekTable(frames,parsed.audio)),app=block(2,application),cue=block(5,cueSheet(starts,total),true);
+    return join([prefix,seeks,app,cue,encoded.subarray(parsed.audio)],prefix.length+seeks.length+app.length+cue.length+encoded.length-parsed.audio)}
   async function build(){
     if(state.busy)return;state.busy=true;invalidate();refresh();
-    const circular=ui.circular.checked,trimMode=ui.trimMode.value;
-    try{await waitForFlac();let trimLeading=0,trimTrailing=0;
-      if(circular){setStatus("Analyzing exact silence at the album boundaries…",0,state.tracks.length+3);
-        await new Promise(requestAnimationFrame);
-        const firstBytes=new Uint8Array(await state.tracks[0].file.arrayBuffer()),firstEdge=edgeAnalysis(firstBytes);
-        setStatus("Analyzing the end of the final track…",1,state.tracks.length+3);await new Promise(requestAnimationFrame);
-        const last=state.tracks.length-1,lastBytes=new Uint8Array(await state.tracks[last].file.arrayBuffer()),lastEdge=edgeAnalysis(lastBytes);
-        trimLeading=trimMode==="tight"?firstEdge.leadingQuiet:Math.floor(firstEdge.leading/CD_FRAME)*CD_FRAME;
-        trimTrailing=trimMode==="tight"?lastEdge.trailingQuiet:Math.floor(lastEdge.trailing/CD_FRAME)*CD_FRAME;
-        if(trimLeading>=state.tracks[0].samples||trimTrailing>=state.tracks[last].samples)
-          throw Error("Circular trimming would remove an entire track.");}
-      const adjusted=state.tracks.map((t,i)=>t.samples-(i===0?trimLeading:0)-(i===state.tracks.length-1?trimTrailing:0));
-      const total=adjusted.reduce((n,s)=>n+s,0),starts=[];let cursor=0;
-      adjusted.forEach(samples=>{starts.push(cursor);cursor+=samples});
+    try{await waitForFlac();
+      const total=state.tracks.reduce((n,t)=>n+t.samples,0),starts=[];let cursor=0;
+      state.tracks.forEach(track=>{starts.push(cursor);cursor+=track.samples});
       const chunks=[],frames=[];let bytesWritten=0,sampleWritten=0;
       const enc=Flac.create_libflac_encoder(RATE,CHANNELS,BPS,Number(ui.compression.value),total,true);
       if(!enc)throw Error("Could not create FLAC encoder.");Flac.FLAC__stream_encoder_set_blocksize(enc,4096);
@@ -134,30 +153,24 @@
         chunks.push(copy);bytesWritten+=bytes;sampleWritten+=samples},()=>{},false,0);
       if(init!==0){Flac.FLAC__stream_encoder_delete(enc);throw Error("Encoder initialization failed ("+init+").")}
       for(let i=0;i<state.tracks.length;i++){const track=state.tracks[i];
-        const progressBase=circular?2:0;
-        setStatus("Decoding and encoding track "+(i+1)+" of "+state.tracks.length+": "+track.file.name,i+progressBase,state.tracks.length+progressBase+1);
+        setStatus("Decoding and encoding track "+(i+1)+" of "+state.tracks.length+": "+track.file.name,i,state.tracks.length+1);
         await new Promise(requestAnimationFrame);const bytes=new Uint8Array(await track.file.arrayBuffer());
-        let sourceSample=0;const keepStart=i===0?trimLeading:0,keepEnd=track.samples-(i===state.tracks.length-1?trimTrailing:0);
-        decode(bytes,(pcm,samples)=>{const chunkStart=sourceSample,chunkEnd=sourceSample+samples;
-          const from=Math.max(0,keepStart-chunkStart),to=Math.min(samples,keepEnd-chunkStart);sourceSample=chunkEnd;
-          return to<=from||Flac.FLAC__stream_encoder_process_interleaved(enc,pcm.subarray(from*2,to*2),to-from)});}
-      const finalProgress=state.tracks.length+(circular?2:0);
-      setStatus("Finalizing metadata…",finalProgress,finalProgress+1);
+        decode(bytes,(pcm,samples)=>Flac.FLAC__stream_encoder_process_interleaved(enc,pcm,samples));}
+      const finalProgress=state.tracks.length;
+      setStatus("Converting album metadata and artwork…",finalProgress,finalProgress+1);
+      const cover=await artwork(state.tracks.map(t=>t.picture).find(Boolean));
       if(!Flac.FLAC__stream_encoder_finish(enc)){const code=Flac.FLAC__stream_encoder_get_state(enc);
         Flac.FLAC__stream_encoder_delete(enc);throw Error("Encoder finish failed ("+code+").")}
-      Flac.FLAC__stream_encoder_delete(enc);const encoded=join(chunks,bytesWritten),album=injectMetadata(encoded,frames,starts,total);
+      Flac.FLAC__stream_encoder_delete(enc);const encoded=join(chunks,bytesWritten),album=injectMetadata(encoded,frames,starts,total,albumApplication(state.tracks,cover));
       inspect(album);state.output=new Blob([album],{type:"audio/flac"});state.outputUrl=URL.createObjectURL(state.output);
       const base=(ui.name.value.trim()||"album").replace(/[\\/:*?"<>|]+/g,"_");
       ui.download.download=base+".flac";ui.download.href=state.outputUrl;ui.download.hidden=false;
-      const trimmed=trimLeading+trimTrailing,trimNote=trimmed?" · trimmed "+(trimmed/RATE).toFixed(3)+
-        " s (start "+(trimLeading/RATE).toFixed(3)+", end "+(trimTrailing/RATE).toFixed(3)+")":"";
-      setStatus("Album ready: "+size(album.length)+" · "+state.tracks.length+" tracks · "+time(total/RATE)+trimNote,1,1);
+      setStatus("Album ready: "+size(album.length)+" · "+state.tracks.length+" tracks · "+time(total/RATE)+" · all samples preserved",1,1);
     }catch(error){console.error(error);setStatus(error.message||String(error))}
     finally{state.busy=false;refresh()}
   }
   ui.choose.onclick=()=>ui.files.click();ui.files.onchange=()=>{add(ui.files.files);ui.files.value=""};
   ui.clear.onclick=()=>{state.tracks=[];invalidate();refresh();setStatus("Add two or more tracks to begin.")};
-  ui.circular.onchange=()=>{invalidate();refresh()};ui.trimMode.onchange=invalidate;
   ui.build.onclick=build;["dragenter","dragover"].forEach(type=>ui.drop.addEventListener(type,e=>{e.preventDefault();ui.drop.classList.add("drag")}));
   ["dragleave","drop"].forEach(type=>ui.drop.addEventListener(type,e=>{e.preventDefault();ui.drop.classList.remove("drag")}));
   ui.drop.addEventListener("drop",e=>add(e.dataTransfer.files));ui.drop.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();ui.files.click()}});

@@ -3,25 +3,31 @@
 Open `index.html` in a current desktop Chrome-compatible browser. No web
 server, installation, account, or upload is required.
 
-The app accepts individual native FLAC tracks, preserves their selected order,
-decodes and losslessly re-encodes them as one continuous stream, and injects a
-standard embedded CD CUESHEET and a frame-aligned SEEKTABLE containing at most
-512 points.
+The app accepts individual native FLAC tracks, preserves every decoded sample
+in the selected order, losslessly re-encodes them as one continuous stream,
+and injects a standard embedded CD CUESHEET and a frame-aligned SEEKTABLE
+containing at most 512 points. It never trims, pads, fades, or otherwise edits
+the audio.
+
+The builder also copies the first available album title, album artist, track
+titles, and front-cover image into an `MP3A` FLAC APPLICATION metadata block.
+Artwork is converted to a letterboxed 92×92 RGB332 thumbnail for the FPGA UI.
+This changes only FLAC metadata; the encoded PCM sample sequence is unchanged.
+Missing fields use filename or generic fallbacks.
+Playlist titles are stored in a 24-character display form and the compact
+current-track fields use 15 characters. Longer values end in `...`.
 
 Inputs must use the MiSTer_MP3 profile: 44.1 kHz, 16-bit, stereo. CD CUESHEET
 track offsets must be divisible by 588 samples, so the app rejects
 non-sector-aligned inputs instead of silently inserting audio gaps.
 
-Optional **Circular album** mode examines the decoded PCM at only the start of
-track 1 and the end of the final track. It removes whole 588-sample CD sectors
-that contain exact digital zeroes. Partial sectors, low-level fades, and all
-nonzero audio remain untouched, and the completion message reports the exact
-duration removed. This is destructive by design and is disabled by default.
+MiSTer_MP3 repeats indexed albums automatically. Whether the last sample joins
+the first musically is therefore determined entirely by the supplied tracks;
+the builder does not attempt to alter that boundary.
 
-The advanced **Tight loop** choice removes consecutive outer CD sectors whose
-stereo RMS is below -50 dBFS. It can make deliberately faded circular masters
-sound more immediate, but it removes real low-level audio. The result reports
-the separate start and end trims so the edit is auditable.
+The companion splitter recovers each track with exactly the same PCM samples
+and boundaries. Its FLAC containers are newly encoded, so compression layout,
+metadata, tags, artwork, and original filenames are not reproduced.
 
 Desktop Chrome, Chromium, Edge, and ChromeOS are the primary targets. The app
 processes one source file at a time, but retains the compressed output until

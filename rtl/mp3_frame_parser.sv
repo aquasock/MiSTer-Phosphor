@@ -94,6 +94,15 @@ reg [1:0] nch;
 reg gr, ch;
 wire [1:0] gci = {gr, ch};
 
+// The accepted profile is specifically MPEG-1 Layer III.  Checking only
+// the top three sync bits admits Layer I/II-looking byte sequences from
+// ID3 cover art (JPEG contains many FF marker bytes).  FA and FB are the
+// only valid second header bytes here; bit 0 is the optional CRC flag.
+function valid_sync_byte;
+    input [7:0] b;
+    begin valid_sync_byte = (b & 8'hFE) == 8'hFA; end
+endfunction
+
 function [10:0] frame_len_lut;
     input [3:0] br_idx;
     input [1:0] s_idx;
@@ -199,10 +208,9 @@ always @(posedge clk) begin
             end
         end
 
-        // Both checks below match tools/mp3_header_reference.py's own frame
-        // acceptance criterion exactly (sync mask on byte 1, non-reserved
-        // bitrate/sample-rate index in byte 2 -- byte 3 is never validated,
-        // by either parser). Real MP3 files are typically preceded by an
+        // Both checks below require the fixed decoder profile's MPEG-1
+        // Layer III header (FA/FB), plus a non-reserved bitrate/sample-rate
+        // index in byte 2. Real MP3 files are typically preceded by an
         // ID3v2 tag that can carry an embedded cover-art image; JPEG data is
         // full of stray FF bytes (marker bytes and general entropy-coded
         // content), some of which pass a first-byte-only or even a 2-byte
@@ -217,7 +225,7 @@ always @(posedge clk) begin
         // resilience against any future frame boundary miscalculation too.
         COLLECT_HEADER: if (input_valid) begin
             if (recv_count == 6'd1) begin
-                if ((input_data & 8'hE0) == 8'hE0) begin
+                if (valid_sync_byte(input_data)) begin
                     hdr_buf[1] <= input_data;
                     recv_count <= 2;
                     frame_recv_count <= frame_recv_count + 11'd1;
@@ -235,7 +243,7 @@ always @(posedge clk) begin
                     hdr_buf[2] <= input_data;
                     recv_count <= 3;
                     frame_recv_count <= frame_recv_count + 11'd1;
-                end else if (hdr_buf[1] == 8'hFF && (input_data & 8'hE0) == 8'hE0) begin
+                end else if (hdr_buf[1] == 8'hFF && valid_sync_byte(input_data)) begin
                     // Retry one byte later: the old byte 1 (already known to
                     // be exactly FF) becomes the new byte 0, and this byte
                     // becomes the new byte 1.

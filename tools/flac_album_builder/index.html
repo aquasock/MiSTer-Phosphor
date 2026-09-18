@@ -21,19 +21,13 @@
       <label>Output filename<span class="filename"><input id="name" value="album"><span>.flac</span></span></label>
       <label>Compression<select id="compression"><option value="5" selected>Level 5 — balanced</option>
         <option value="8">Level 8 — smallest, slower</option><option value="0">Level 0 — fastest, larger</option></select></label>
-      <label class="check"><input id="circular" type="checkbox"><span><strong>Circular album</strong>
-        <small>Trim whole CD sectors of exact silence from the beginning of track 1 and end of the final track.</small></span></label>
-      <label>Boundary trim<select id="trim-mode" disabled>
-        <option value="exact" selected>Exact digital silence — conservative</option>
-        <option value="tight">Tight loop — quiet sectors below −50 dBFS</option>
-      </select></label>
     </section>
     <section class="actions"><button id="build" class="primary" type="button" disabled>Build album FLAC</button>
       <a id="download" class="button" hidden>Download album</a></section>
     <section class="status" aria-live="polite"><progress id="progress" max="1" value="0"></progress>
       <p id="status">Add two or more tracks to begin.</p></section>
     <details><summary>Output requirements and privacy</summary>
-      <p>Inputs must be native FLAC, 44.1 kHz, 16-bit, stereo, with CD-sector-aligned lengths. The output contains a standard embedded CUESHEET and SEEKTABLE understood by MiSTer_MP3. Conservative circular mode removes exact zero-valued sectors. Tight mode also removes consecutive outer sectors below −50 dBFS RMS and therefore intentionally trims quiet fade material. Partial sectors are always retained. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p></details>
+      <p>Inputs must be native FLAC, 44.1 kHz, 16-bit, stereo, with CD-sector-aligned lengths. The output contains a standard embedded CUESHEET and SEEKTABLE understood by MiSTer_MP3. Every decoded input sample is retained in its original order; the builder never trims, pads, fades, or otherwise edits the audio. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p></details>
   </main>
   <script src="vendor/libflac.js"></script>
   <script src="app.js"></script>

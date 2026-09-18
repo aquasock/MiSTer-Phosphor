@@ -3,6 +3,7 @@
 module media_ui_album_order_tb;
 reg clk=0,reset=1,new_file=0,loaded=0,paused=0,seeking=0;
 reg music_mode=1,track_changed=0,track_valid=1;
+reg album_ui_visible=0;
 reg [34:0] elapsed_q=35'd50,target_q=0,duration_q=35'd100;
 reg [34:0] track_elapsed_q=35'd5,track_duration_q=35'd20,track_origin_q=35'd40;
 wire known;
