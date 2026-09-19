@@ -3,20 +3,24 @@
 // The renderer is placed on the native raster before the HDMI/analog split.
 (* altera_attribute="-name AUTO_DSP_RECOGNITION OFF" *)
 module media_flac_album_ui(
- input wire clk,enabled,
- input wire metadata_valid,artwork_valid,current_title_long,input wire [6:0] track_count,current_track,
+ input wire clk,enabled,widescreen,
+ input wire metadata_valid,artwork_valid,current_title_long,input wire [7:0] track_count,current_track,
  output reg [13:0] metadata_address=0,input wire [7:0] metadata_data,
  input wire [23:0] rgb,input wire hs,vs,de,layout_de,
  output reg [23:0] rgb_out=0,output reg hs_out=0,vs_out=0,de_out=0
 );
- reg [11:0] x=0,y=0;
+ reg [11:0] raster_x=0,y=0;
  reg de_d=0,vs_d=0;
+ wire frame_tick=vs&&!vs_d;
  always @(posedge clk) begin
   de_d<=layout_de;vs_d<=vs;
-  if(layout_de)x<=x+1'b1;else x<=0;
+  if(layout_de)raster_x<=raster_x+1'b1;
+  else raster_x<=0;
   if(de_d&&!layout_de)y<=y+1'b1;
  if(vs&&!vs_d)y<=0;
  end
+
+ wire [11:0] x=raster_x;
 
  // The historical panel group is 328 lines tall. Offset its local coordinate
  // by 76 lines so the complete group is vertically centered in 480 lines.
@@ -26,10 +30,10 @@ module media_flac_album_ui(
  wire art_inner=x>=12'd36&&x<12'd220&&ui_y>=12'd8&&ui_y<12'd192;
  wire info_panel=x>=12'd28&&x<12'd228&&ui_y>=12'd212&&ui_y<12'd328;
  wire list_panel=x>=12'd242&&x<12'd612&&ui_y>=12'd0&&ui_y<12'd328;
- reg [6:0] display_start;
+ reg [7:0] display_start;
  always @* begin
   if(current_track<=3||track_count<=6)display_start=1;
-  else if(current_track+3>track_count)display_start=track_count-5;
+  else if(current_track>track_count-3)display_start=track_count-5;
   else display_start=current_track-2;
  end
  wire [2:0] selected_slot=current_track>=display_start?current_track-display_start:0;
@@ -46,6 +50,69 @@ module media_flac_album_ui(
  wire info_border=info_panel&&(x<12'd30||x>=12'd226||ui_y<12'd214||ui_y>=12'd326);
  wire list_border=list_panel&&(x<12'd244||x>=12'd610||ui_y<12'd2||ui_y>=12'd326);
 
+ // Length bytes live in otherwise unused metadata-record bytes. Fetch them
+ // during vertical blanking so the single video-side RAM port remains free
+ // for glyphs and artwork throughout the visible raster.
+ reg [2:0] length_fetch=0;
+ reg [4:0] title_length=0,artist_length=0,album_length=0;
+ reg [7:0] tracked_track=0;
+ reg [15:0] title_scroll=0,artist_scroll=0,album_scroll=0,row_scroll=0;
+ wire [4:0] row_width=track_count>99?5'd23:5'd24;
+ wire [4:0] title_limit=title_length>15?title_length-15:0;
+ wire [4:0] artist_limit=artist_length>15?artist_length-15:0;
+ wire [4:0] album_limit=album_length>15?album_length-15:0;
+ wire [4:0] row_limit=title_length>row_width?title_length-row_width:0;
+ function [15:0] advance_scroll;
+  input [15:0] current;input [4:0] limit;
+  reg [4:0] offset;reg direction;reg [3:0] pace;reg [5:0] pause;
+  begin
+   offset=current[4:0];direction=current[5];pace=current[9:6];pause=current[15:10];
+   if(limit==0)begin offset=0;direction=0;pace=0;pause=45;end
+   else if(offset>limit)begin offset=0;direction=0;pace=0;pause=45;end
+   else if(pause!=0)pause=pause-1'b1;
+   else if(pace==9)begin
+    pace=0;
+    if(!direction)begin
+     if(offset>=limit)begin direction=1;pause=45;end
+     else if(offset+1'b1>=limit)begin offset=limit;direction=1;pause=45;end
+     else offset=offset+1'b1;
+    end else if(offset<=1)begin offset=0;direction=0;pause=45;end
+    else offset=offset-1'b1;
+   end else pace=pace+1'b1;
+   advance_scroll={pause,pace,direction,offset};
+  end
+ endfunction
+ always @(posedge clk)begin
+  if(!enabled||!metadata_valid)begin
+   length_fetch<=0;title_length<=0;artist_length<=0;album_length<=0;tracked_track<=0;
+   title_scroll<=0;artist_scroll<=0;album_scroll<=0;row_scroll<=0;
+  end else begin
+   if(frame_tick)begin
+    length_fetch<=1;
+    if(tracked_track!=current_track)begin
+     tracked_track<=current_track;
+     title_scroll<={6'd45,10'd0};artist_scroll<={6'd45,10'd0};
+     album_scroll<={6'd45,10'd0};row_scroll<={6'd45,10'd0};
+    end else begin
+     title_scroll<=advance_scroll(title_scroll,title_limit);
+     artist_scroll<=advance_scroll(artist_scroll,artist_limit);
+     album_scroll<=advance_scroll(album_scroll,album_limit);
+     row_scroll<=advance_scroll(row_scroll,row_limit);
+    end
+   end else case(length_fetch)
+    1:length_fetch<=2;
+    2:begin album_length<=metadata_data[4:0]==0?5'd15:metadata_data[4:0];length_fetch<=3;end
+    3:length_fetch<=4;
+    4:begin artist_length<=metadata_data[4:0]==0?5'd15:metadata_data[4:0];length_fetch<=5;end
+    5:length_fetch<=6;
+    6:begin
+     title_length<=metadata_data[4:0]<=1?(current_title_long?5'd24:5'd15):metadata_data[4:0];
+     length_fetch<=0;
+    end
+   endcase
+  end
+ end
+
  reg [3:0] text_line;
  reg [11:0] text_x,text_y;
  reg [5:0] text_length;
@@ -55,7 +122,8 @@ module media_flac_album_ui(
   if(ui_y>=226&&ui_y<242&&x>=40&&x<220)begin text_line=2;text_x=40;text_y=226;text_length=metadata_valid?15:3;text_color=3;end
   else if(ui_y>=256&&ui_y<272&&x>=40&&x<220)begin text_line=3;text_x=40;text_y=256;text_length=metadata_valid?15:3;text_color=3;end
   else if(ui_y>=286&&ui_y<302&&x>=40&&x<220)begin text_line=4;text_x=40;text_y=286;text_length=metadata_valid?15:3;text_color=3;end
-  else if(ui_y>=16&&ui_y<32&&x>=258&&x<470)begin text_line=5;text_x=258;text_y=16;text_length=16;text_color=3;end
+  // 16 glyphs * 12 pixels = 192 pixels, centered in the 370-pixel panel.
+  else if(ui_y>=16&&ui_y<32&&x>=331&&x<523)begin text_line=5;text_x=331;text_y=16;text_length=16;text_color=3;end
   else if(ui_y>=64&&ui_y<80&&x>=260&&x<590)begin text_line=6;text_x=260;text_y=64;text_length=metadata_valid ? 27:14;text_color=(current_track==display_start) ? 3:2;end
   else if(ui_y>=106&&ui_y<122&&x>=260&&x<590)begin text_line=7;text_x=260;text_y=106;text_length=metadata_valid ? 27:14;text_color=(current_track==display_start+1'b1) ? 3:2;end
   else if(ui_y>=148&&ui_y<164&&x>=260&&x<590)begin text_line=8;text_x=260;text_y=148;text_length=metadata_valid ? 27:14;text_color=(current_track==display_start+2'd2) ? 3:2;end
@@ -114,39 +182,64 @@ module media_flac_album_ui(
   else char_index=26;
  end
  wire text_candidate=text_line!=15&&x>=text_x&&char_index<text_length;
- wire [3:0] glyph_x=(text_dx-char_index*12)>>1;
+ wire [11:0] glyph_pixel_x=text_dx-char_index*12;
+ wire [3:0] glyph_x=glyph_pixel_x>>1;
  wire [2:0] glyph_y=(ui_y-text_y)>>1;
  reg [7:0] static_glyph;
  reg dynamic_glyph;
  reg [13:0] text_metadata_address;
- reg [6:0] row_track;
- reg [3:0] row_tens;
- wire [6:0] row_ones=row_track-(row_tens<<3)-(row_tens<<1);
+ reg [5:0] source_index;
+ reg [7:0] row_track;
+ reg [3:0] row_hundreds,row_tens;
+ wire [7:0] row_after_hundreds=row_track-((row_hundreds<<6)+(row_hundreds<<5)+(row_hundreds<<2));
+ wire [7:0] row_ones=row_after_hundreds-(row_tens<<3)-(row_tens<<1);
  always @* begin
-  static_glyph=0;dynamic_glyph=0;text_metadata_address=0;row_track=0;row_tens=0;
+  static_glyph=0;dynamic_glyph=0;text_metadata_address=0;source_index=0;
+  row_track=0;row_hundreds=0;row_tens=0;
   // String literals occupy the least-significant bytes of line_text, with
   // their first character at byte text_length-1.
   if(text_candidate)static_glyph=line_text[((text_length-char_index)*8)-1 -: 8];
   if(metadata_valid&&text_candidate)begin
    if(text_line==2)begin
-    if(current_title_long&&char_index>=12)static_glyph=".";
-    else begin dynamic_glyph=1;text_metadata_address=14'd72+((current_track?current_track:1)-1'b1)*32+char_index;end
+    static_glyph=" ";
+    source_index=char_index+title_scroll[4:0];
+    if(source_index<title_length)begin dynamic_glyph=1;text_metadata_address=14'd72+((current_track?current_track:1)-1'b1)*32+source_index;end
    end else if(text_line==3)begin
-    dynamic_glyph=1;text_metadata_address=14'd40+char_index;
+    static_glyph=" ";
+    source_index=char_index+artist_scroll[4:0];
+    if(source_index<artist_length)begin dynamic_glyph=1;text_metadata_address=14'd40+source_index;end
    end else if(text_line==4)begin
-    dynamic_glyph=1;text_metadata_address=14'd8+char_index;
+    static_glyph=" ";
+    source_index=char_index+album_scroll[4:0];
+    if(source_index<album_length)begin dynamic_glyph=1;text_metadata_address=14'd8+source_index;end
    end else if(text_line>=6&&text_line<=11)begin
+    static_glyph=" ";
     row_track=display_start+(text_line-6);
-    if(row_track>=90)row_tens=9;else if(row_track>=80)row_tens=8;
-    else if(row_track>=70)row_tens=7;else if(row_track>=60)row_tens=6;
-    else if(row_track>=50)row_tens=5;else if(row_track>=40)row_tens=4;
-    else if(row_track>=30)row_tens=3;else if(row_track>=20)row_tens=2;
-    else if(row_track>=10)row_tens=1;
+    if(row_track>=200)row_hundreds=2;else if(row_track>=100)row_hundreds=1;
+    if(row_after_hundreds>=90)row_tens=9;else if(row_after_hundreds>=80)row_tens=8;
+    else if(row_after_hundreds>=70)row_tens=7;else if(row_after_hundreds>=60)row_tens=6;
+    else if(row_after_hundreds>=50)row_tens=5;else if(row_after_hundreds>=40)row_tens=4;
+    else if(row_after_hundreds>=30)row_tens=3;else if(row_after_hundreds>=20)row_tens=2;
+    else if(row_after_hundreds>=10)row_tens=1;
     if(row_track>track_count)static_glyph=" ";
-    else if(char_index==0)static_glyph=8'd48+row_tens;
-    else if(char_index==1)static_glyph=8'd48+row_ones;
-    else if(char_index==2)static_glyph=" ";
-    else begin dynamic_glyph=1;text_metadata_address=14'd72+(row_track-1'b1)*32+(char_index-3);end
+    else if(track_count<=99)begin
+     if(char_index==0)static_glyph=8'd48+row_tens;
+     else if(char_index==1)static_glyph=8'd48+row_ones;
+     else if(char_index==2)static_glyph=" ";
+     else begin
+      source_index=char_index-3+(row_track==current_track?row_scroll[4:0]:0);
+      if(row_track!=current_track||source_index<title_length)begin dynamic_glyph=1;text_metadata_address=14'd72+(row_track-1'b1)*32+source_index;end
+     end
+    end else begin
+     if(char_index==0)static_glyph=row_hundreds?8'd48+row_hundreds:" ";
+     else if(char_index==1)static_glyph=8'd48+row_tens;
+     else if(char_index==2)static_glyph=8'd48+row_ones;
+     else if(char_index==3)static_glyph=" ";
+     else begin
+      source_index=char_index-4+(row_track==current_track?row_scroll[4:0]:0);
+      if(row_track!=current_track||source_index<title_length)begin dynamic_glyph=1;text_metadata_address=14'd72+(row_track-1'b1)*32+source_index;end
+     end
+    end
    end
   end
  end
@@ -155,7 +248,12 @@ module media_flac_album_ui(
  wire [6:0] art_x=(x-12'd36)>>1;
  wire [6:0] art_y=(ui_y-12'd8)>>1;
  (* multstyle="logic" *) wire [13:0] art_row_offset=art_y*92;
- always @* metadata_address=art_request?14'd3240+art_row_offset+art_x:text_metadata_address;
+ always @* begin
+  if(length_fetch==1||length_fetch==2)metadata_address=14'd39;
+  else if(length_fetch==3||length_fetch==4)metadata_address=14'd71;
+  else if(length_fetch==5||length_fetch==6)metadata_address=14'd72+((current_track?current_track:1)-1'b1)*32+14'd31;
+  else metadata_address=art_request?14'd3240+art_row_offset+art_x:text_metadata_address;
+ end
 
  (* ramstyle="M10K" *) reg [4:0] font[0:2047];
  initial $readmemb("rtl/media_overlay_font.mem",font);

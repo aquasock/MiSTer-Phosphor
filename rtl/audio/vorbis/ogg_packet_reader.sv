@@ -67,7 +67,10 @@ module ogg_packet_reader(
         if(!serial_locked)begin serial_locked<=1;locked_serial<=serial;end
         expected_sequence<=page_sequence+1'b1;
        end
-       if(header_type[0]!=packet_open)begin error<=1;packet_open<=header_type[0];end
+       // A seek may restart at a page whose first packet is continued. Adopt
+       // that state on the first page and discard it to the next boundary.
+       if(!serial_locked)packet_open<=header_type[0];
+       else if(header_type[0]!=packet_open)begin error<=1;packet_open<=header_type[0];end
        state<=byte_data==0?SYNC:LACES;
       end
      endcase

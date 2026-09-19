@@ -5,12 +5,14 @@ module flac_stream_decoder #(parameter ENABLE_RESUME=0) (
  input wire clk,reset,
  input wire resume_frame,
  input wire [35:0] resume_sample,resume_total,
+ input wire [19:0] resume_rate,
  input wire [15:0] resume_min_block,resume_max_block,
  input wire [7:0] input_data,
  input wire input_valid,input_end,
  output wire input_ready,
  output reg metadata_valid,
  output reg [35:0] total_samples,
+ output reg [19:0] sample_rate,
  output wire begin_valid,
  input wire begin_ready,
  output reg [15:0] frame_size,
@@ -84,7 +86,9 @@ module flac_stream_decoder #(parameter ENABLE_RESUME=0) (
    crc_active<=0;header_active<=0;min_block<=(ENABLE_RESUME&&resume_frame)?resume_min_block:16'd0;max_block<=(ENABLE_RESUME&&resume_frame)?resume_max_block:16'd0;crc16<=0;crc8<=0;
    block_code<=0;rate_code<=0;variable_block<=0;blocking_known<=0;blocking_mode<=0;
    short_frame<=0;fixed_size<=0;frame_number<=0;coded_number<=0;number_min<=0;continuation<=0;
-   metadata_valid<=ENABLE_RESUME&&resume_frame;total_samples<=(ENABLE_RESUME&&resume_frame)?resume_total:36'd0;frame_size<=0;channel_assignment<=0;frame_position<=(ENABLE_RESUME&&resume_frame)?resume_sample:36'd0;
+   metadata_valid<=ENABLE_RESUME&&resume_frame;total_samples<=(ENABLE_RESUME&&resume_frame)?resume_total:36'd0;
+   sample_rate<=(ENABLE_RESUME&&resume_frame)?resume_rate:20'd0;
+   frame_size<=0;channel_assignment<=0;frame_position<=(ENABLE_RESUME&&resume_frame)?resume_sample:36'd0;
    sample_channel<=0;sample_index<=0;finished<=0;error<=0;
   end else if(store_error)fail(8);
   else begin
@@ -113,7 +117,8 @@ module flac_stream_decoder #(parameter ENABLE_RESUME=0) (
      else begin min_block<=field[31:16];max_block<=field[15:0];skip_bytes(6,INFO_RATE);end
     INFO_RATE:read_bits(64,META_NEXT);
     META_NEXT:if(!metadata_valid)begin
-     if(field[63:44]!=44100||field[43:41]!=1||field[40:36]!=15)fail(2);
+     sample_rate<=field[63:44];
+     if((field[63:44]!=44100&&field[63:44]!=48000)||field[43:41]!=1||field[40:36]!=15)fail(2);
      else begin total_samples<=field[35:0];metadata_valid<=1;skip_bytes(16,META_NEXT);end
     end else if(meta_last)state<=WAIT_FRAME;else read_bits(32,META_HEADER);
     SKIP:if(input_valid)begin
@@ -135,7 +140,7 @@ module flac_stream_decoder #(parameter ENABLE_RESUME=0) (
      block_code<=field[15:12];rate_code<=field[11:8];channel_assignment<=field[7:4];
      if(field[0]||!(field[3:1]==0||field[3:1]==4)||
         !(field[7:4]==1||field[7:4]==8||field[7:4]==9||field[7:4]==10)||field[15:12]==0||
-        !(field[11:8]==0||field[11:8]==9||field[11:8]==12||field[11:8]==13||field[11:8]==14))fail(3);
+        !(field[11:8]==0||field[11:8]==9||field[11:8]==10||field[11:8]==12||field[11:8]==13||field[11:8]==14))fail(3);
      else begin
       if(field[15:12]==1)frame_size<=192;
       else if(field[15:12]<=5)frame_size<=16'd576<<(field[15:12]-2);
@@ -170,9 +175,13 @@ module flac_stream_decoder #(parameter ENABLE_RESUME=0) (
     RATE_START:begin
      if(frame_size==0||frame_size>max_block||(!variable_block&&blocking_known&&frame_size>fixed_size))fail(3);
      else if(rate_code>=12)read_bits(rate_code==12?7'd8:7'd16,RATE_CHECK);
-     else read_bits(8,HEADER_CRC);
+     else if(rate_code==0||(rate_code==9&&sample_rate==44100)||(rate_code==10&&sample_rate==48000))read_bits(8,HEADER_CRC);
+     else fail(3);
     end
-    RATE_CHECK:if(!((rate_code==13&&field==44100)||(rate_code==14&&field==4410)))fail(3);else read_bits(8,HEADER_CRC);
+    RATE_CHECK:if(!((rate_code==12&&sample_rate==48000&&field==48)||
+      (rate_code==13&&field==sample_rate)||
+      (rate_code==14&&((sample_rate==44100&&field==4410)||(sample_rate==48000&&field==4800)))))fail(3);
+     else read_bits(8,HEADER_CRC);
     HEADER_CRC:if(crc8!=0)fail(4);else begin
      header_active<=0;first_resume<=0;sample_channel<=0;sample_index<=0;state<=BEGIN_FRAME;
      short_frame<=frame_size<min_block||(!variable_block&&blocking_known&&frame_size!=fixed_size);

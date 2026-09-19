@@ -2,13 +2,14 @@
 // header/setup memories and exposes the same byte-stream/PCM handshake used by
 // the other player decoders.
 module vorbis_stream_decoder(
- input wire clk,input wire reset,
+ input wire clk,input wire reset,input wire seek_reset,
  input wire byte_valid,input wire [7:0] byte_data,output wire byte_ready,
  output wire pcm_valid,input wire pcm_ready,
  output wire signed [31:0] pcm_left,output wire signed [31:0] pcm_right,
- output wire [31:0] sample_rate,output wire ready,output wire error
+ output wire [31:0] sample_rate,output wire [31:0] bitrate_nominal,
+ output wire [63:0] granule_position,output wire ready,output wire error
 );
- wire packet_valid,packet_start,packet_end,packet_ready;wire [7:0] packet_data;wire [63:0] granule_position;
+ wire packet_valid,packet_start,packet_end,packet_ready;wire [7:0] packet_data;
  wire ogg_error,header_ready,setup_ready,decoder_ready,header_error,identification_valid,headers_valid;
  wire [7:0] channels;wire [11:0] blocksize_short,blocksize_long;wire [1:0] header_number;
  wire setup_valid,setup_error;wire [7:0] codebook_count;wire [13:0] active_entries,multiplicand_count;
@@ -41,13 +42,14 @@ module vorbis_stream_decoder(
  assign ready=headers_valid&&builder_done&&!error;
  assign error=ogg_error|header_error|setup_error|prefix_error|builder_error|decoder_error;
 
- ogg_packet_reader ogg(.clk(clk),.reset(reset),.byte_valid(byte_valid),.byte_data(byte_data),.byte_ready(byte_ready),
+ ogg_packet_reader ogg(.clk(clk),.reset(reset||seek_reset),.byte_valid(byte_valid),.byte_data(byte_data),.byte_ready(byte_ready),
   .packet_valid(packet_valid),.packet_data(packet_data),.packet_start(packet_start),.packet_end(packet_end),
   .packet_ready(packet_ready),.granule_position(granule_position),.error(ogg_error));
  vorbis_header_parser headers(.clk(clk),.reset(reset),.packet_valid(gated_packet_valid),.packet_data(packet_data),
   .packet_start(packet_start),.packet_end(packet_end),.packet_enable(packet_ready),.packet_ready(header_ready),
   .identification_valid(identification_valid),.headers_valid(headers_valid),.error(header_error),.channels(channels),
-  .sample_rate(sample_rate),.blocksize_short(blocksize_short),.blocksize_long(blocksize_long),.header_number(header_number));
+  .sample_rate(sample_rate),.bitrate_nominal(bitrate_nominal),
+  .blocksize_short(blocksize_short),.blocksize_long(blocksize_long),.header_number(header_number));
  vorbis_setup_codebooks setup(.*,.packet_valid(gated_packet_valid),.packet_ready(setup_ready),
   .valid(setup_valid),.error(setup_error),.active_query_address(setup_active_address));
  vorbis_huffman_prefix prefix(.clk(clk),.reset(reset),.leaf_valid(prefix_leaf_valid),.leaf_ready(prefix_leaf_ready),
@@ -60,6 +62,6 @@ module vorbis_stream_decoder(
   .prefix_ready(prefix_ready),.leaf_valid(prefix_leaf_valid),.leaf_ready(prefix_leaf_ready),.leaf_book(prefix_leaf_book),
   .leaf_codeword(prefix_leaf_codeword),.leaf_length(prefix_leaf_length),.leaf_symbol(prefix_leaf_symbol),
   .done(builder_done),.error(builder_error));
- vorbis_audio_decoder decoder(.*,.packet_valid(gated_packet_valid),.packet_ready(decoder_ready),
+ vorbis_audio_decoder decoder(.*,.reset(reset||seek_reset),.packet_valid(gated_packet_valid),.packet_ready(decoder_ready),
   .active_query_address(decoder_active_address),.error(decoder_error));
 endmodule

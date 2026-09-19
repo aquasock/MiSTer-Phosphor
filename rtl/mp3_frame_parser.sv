@@ -29,6 +29,7 @@ module mp3_frame_parser (
     output reg [1:0] channel_mode,
     output reg [1:0] mode_extension,
     output reg [10:0] frame_len,      // total frame length in bytes, including the 4-byte header
+    output wire [3:0] bitrate_index,
     output reg [8:0] main_data_begin,
     output reg [1:0] sr_idx,          // raw header sample_rate_index: 0=44100Hz, 1=48000Hz, 2=32000Hz (the only accepted rates; 3=reserved, out of profile)
 
@@ -83,6 +84,8 @@ reg [10:0] frame_recv_count;   // bytes consumed since the start of the current 
 reg protection_bit;
 reg [3:0] bitrate_idx;
 reg padding;
+
+assign bitrate_index = bitrate_idx;
 
 reg [8:0] bit_pos;   // absolute bit offset into hdr_buf, from the start of the frame
 reg [11:0] bits_left;

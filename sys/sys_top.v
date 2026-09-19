@@ -1646,9 +1646,9 @@ wire [1:0] player_visualizer;
 wire [13:0] player_meta_address;
 wire [7:0] player_meta_data;
 wire player_meta_valid,player_meta_artwork_valid,player_meta_title_long;
-wire [6:0] player_meta_track_count,player_meta_current_track;
+wire [7:0] player_meta_track_count,player_meta_current_track;
 wire core_pcm_active,core_pcm_tick;
-wire music_request,music_paused,music_pcm_reset,music_pcm_valid,music_pcm_ready;
+wire music_request,music_paused,music_pcm_reset,music_pcm_valid,music_pcm_ready,player_native_48k;
 wire [32:0] music_pcm_data;
 wire music_clock,music_finished,music_error;
 wire visual_active,visual_tick;
@@ -1657,7 +1657,7 @@ wire [35:0] music_position;
 wire analog_l,analog_r;
 wire movie_bclk,movie_lrclk,movie_i2s,movie_spdif,movie_analog_l,movie_analog_r;
 media_native_audio native_audio(.refclk(FPGA_CLK3_50),.config_clk(clk_sys),.wr_clk(ram_clk),.reset(reset),.movie_clock(clk_audio),
- .want_cd(music_request),.paused(music_paused),.movie_96k(audio_96k),.attenuation(vol_att),
+ .want_cd(music_request),.paused(music_paused),.movie_96k(audio_96k),.native_48k(player_native_48k),.attenuation(vol_att),
  .pcm_reset(music_pcm_reset),.pcm_valid(music_pcm_valid),.pcm_data(music_pcm_data),.pcm_ready(music_pcm_ready),
  .visual_active(visual_active),.visual_tick(visual_tick),.visual_left(visual_left),.visual_right(visual_right),
  .cd_clock(music_clock),.position(music_position),.finished(music_finished),.error(music_error),
@@ -1974,7 +1974,7 @@ emu emu
 	.LED_DISK(led_disk),
 
 	.PLAYER_VISUALIZER(player_visualizer),.PLAYER_CORE_PCM_ACTIVE(core_pcm_active),.PLAYER_CORE_PCM_TICK(core_pcm_tick),
-	.PLAYER_MUSIC(music_request),.PLAYER_MUSIC_PAUSED(music_paused),
+	.PLAYER_MUSIC(music_request),.PLAYER_NATIVE_48K(player_native_48k),.PLAYER_MUSIC_PAUSED(music_paused),
  .PLAYER_PCM_RESET(music_pcm_reset),.PLAYER_PCM_VALID(music_pcm_valid),.PLAYER_PCM_DATA(music_pcm_data),.PLAYER_PCM_READY(music_pcm_ready),
  .CLK_AUDIO_CD(music_clock),.PLAYER_MUSIC_POSITION(music_position),.PLAYER_MUSIC_FINISHED(music_finished),.PLAYER_MUSIC_ERROR(music_error),
  .CLK_AUDIO(clk_audio),

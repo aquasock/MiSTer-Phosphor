@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MiSTer-Phosphor Media Builder</title><link rel="stylesheet" href="style.css"></head><body><main>
+<header><p class="eyebrow">MiSTer-Phosphor utility</p><h1>Media Builder</h1><p>Create either a mixed-format playlist TAR or a gapless, cyclical FLAC album. Processing stays in your browser.</p></header>
+<nav role="tablist" aria-label="Builder mode"><button id="playlist-tab" role="tab" aria-selected="true" data-panel="playlist">Mixed Playlist TAR</button><button id="flac-tab" role="tab" aria-selected="false" data-panel="flac">Gapless FLAC Album</button></nav>
+<section id="playlist" class="view active" role="tabpanel" aria-labelledby="playlist-tab"><iframe title="Mixed Playlist TAR Builder" src="tar/index.html"></iframe></section>
+<section id="flac" class="view" role="tabpanel" aria-labelledby="flac-tab"><iframe title="Gapless FLAC Album Builder" src="flac/index.html"></iframe></section>
+<footer>Mixed TARs preserve original MP3, Ogg, WAV, and FLAC files. Gapless albums are re-encoded losslessly into one continuous FLAC with an embedded CUESHEET.</footer>
+</main><script src="app.js"></script></body></html>

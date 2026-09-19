@@ -9,7 +9,7 @@ module media_hdmi_audio_control #(
  parameter integer STRETCH_LIMIT=250000,
  parameter integer GRANT_LIMIT=1000000
 )(
- input wire clk,reset,want_cd,movie_96k,clients_idle,clock_ready,clock_applied_cd,
+ input wire clk,reset,want_cd,movie_96k,native_48k,clients_idle,clock_ready,clock_applied_cd,
  output wire clock_cd,mute,cd_ready,error,
  input wire pad_scl,pad_sda,hps_scl_low,hps_sda_low,
  output wire hps_scl_in,hps_sda_in,drive_scl_low,drive_sda_low
@@ -18,7 +18,7 @@ module media_hdmi_audio_control #(
  wire[1:0] config_mode;
  wire local_request,local_done,local_grant,local_scl_low,local_sda_low;
  media_audio_rate_control #(.QUIET_CYCLES(QUIET_CYCLES),.DRAIN_CYCLES(DRAIN_CYCLES)) control(
-  .clk(clk),.reset(reset),.want_cd(want_cd),.movie_96k(movie_96k),.clients_idle(clients_idle),
+  .clk(clk),.reset(reset),.want_cd(want_cd),.movie_96k(movie_96k),.native_48k(native_48k),.clients_idle(clients_idle),
   .clock_ready(clock_ready),.clock_applied_cd(clock_applied_cd),.hps_changed(hps_changed),
   .config_ready(config_ready),.config_done(config_done),.config_error(config_error),
   .clock_cd(clock_cd),.mute(mute),.cd_ready(cd_ready),.config_request(config_request),.config_mode(config_mode),.error(error));

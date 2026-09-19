@@ -5,7 +5,7 @@ module media_file_reader #(
     parameter integer TIMEOUT_CYCLES=100000000
 )(
     input wire clk,reset,start,cancel,suspend,
-    input wire [63:0] file_size,start_offset,
+    input wire [63:0] file_size,file_base,start_offset,
     output reg [31:0] sd_lba=0,
     output reg [5:0] sd_blk_cnt=0,
     output reg sd_rd=0,
@@ -32,7 +32,8 @@ reg [15:0] staging[0:2047];
 reg [15:0] word_q;
 wire receiving=state==WAIT_ACK || state==RECEIVE || state==TAIL;
 wire [63:0] remaining=size-byte_position;
-wire [63:0] span=remaining+{55'd0,byte_position[8:0]};
+wire [63:0] physical_position=file_base+byte_position;
+wire [63:0] span=remaining+{55'd0,physical_position[8:0]};
 wire [12:0] batch_bytes=span>=4096 ? 13'd4096 : span[12:0];
 wire [3:0] sectors=batch_bytes[12:9]+ {3'd0,(|batch_bytes[8:0])};
 assign idle=state==IDLE && !sd_ack;
@@ -71,8 +72,8 @@ always @(posedge clk) begin
         PREPARE: if(cancel) state<=IDLE;
         else if(byte_position==size) state<=END_FILE;
         else if(!suspend) begin
-            sd_lba<=byte_position[40:9];sd_blk_cnt<={2'd0,sectors}-1'b1;
-            pos<={4'd0,byte_position[8:0]};limit<=batch_bytes;
+            sd_lba<=physical_position[40:9];sd_blk_cnt<={2'd0,sectors}-1'b1;
+            pos<={4'd0,physical_position[8:0]};limit<=batch_bytes;
             expected_words<={sectors,8'd0};words<=0;bad_response<=0;
             sd_rd<=1;wait_cycles<=0;requests<=requests+1'b1;state<=WAIT_ACK;
         end

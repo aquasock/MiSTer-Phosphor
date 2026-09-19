@@ -9,6 +9,7 @@ module audio_pcm_output_adapter
 (
     input  wire        clk,
     input  wire        reset,
+    input  wire        paused,
 
     input  wire [34:0] fifo_data,
     input  wire        fifo_empty,
@@ -32,6 +33,8 @@ wire [15:0] fifo_right   = fifo_data[15:0];
 reg         started;
 reg  [1:0]  current_sr_idx;
 reg  [25:0] phase_accum;
+(* preserve, altera_attribute="-name AUTO_SHIFT_REGISTER_RECOGNITION OFF; -name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+reg [1:0] paused_sync;
 
 wire [25:0] rate_step = (current_sr_idx == 2'd1) ? RATE_48000 :
                         (current_sr_idx == 2'd2) ? RATE_32000 : RATE_44100;
@@ -46,13 +49,19 @@ always @(posedge clk) begin
         started          <= 1'b0;
         current_sr_idx   <= 2'd0;
         phase_accum      <= 26'd0;
+        paused_sync      <= 2'b00;
     end
     else begin
+        paused_sync <= {paused_sync[0],paused};
         fifo_rd <= 1'b0;
 
         if (!started) begin
             phase_accum <= 26'd0;
-            if (!fifo_empty) begin
+            if (paused_sync[1]) begin
+                audio_l <= 16'd0;
+                audio_r <= 16'd0;
+            end
+            else if (!fifo_empty) begin
                 fifo_rd          <= 1'b1;
                 audio_l          <= fifo_left;
                 audio_r          <= fifo_stereo ? fifo_right : fifo_left;
@@ -62,7 +71,13 @@ always @(posedge clk) begin
         end
         else if (phase_sum >= {1'b0, AUDIO_CLK_HZ}) begin
             phase_accum <= phase_sum[25:0] - AUDIO_CLK_HZ;
-            if (!fifo_empty) begin
+            if (paused_sync[1]) begin
+                // Stop at a complete PCM-sample boundary.  The current FIFO
+                // head remains untouched and is the first sample on resume.
+                audio_l <= 16'd0;
+                audio_r <= 16'd0;
+            end
+            else if (!fifo_empty) begin
                 fifo_rd          <= 1'b1;
                 audio_l          <= fifo_left;
                 audio_r          <= fifo_stereo ? fifo_right : fifo_left;

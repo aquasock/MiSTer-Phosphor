@@ -4,6 +4,9 @@ module flac_album_control(
  input wire clk,reset,new_file,enabled,osd_open,
  input wire [10:0] key,
  input wire byte_valid,input wire [7:0] byte_data,
+ input wire external_cue_write,input wire [6:0] external_cue_address,
+ input wire [31:0] external_cue_frame,input wire external_cue_commit,
+ input wire [6:0] external_cue_count,
  input wire [35:0] position,
  input wire [63:0] file_size,
  input wire reader_start,landed,seek_request,
@@ -12,6 +15,7 @@ module flac_album_control(
  output reg [40:0] start_offset=0,
  output reg [35:0] start_sample=0,target_sample=0,
  output reg [35:0] total_samples=0,
+ output reg [19:0] sample_rate=0,
  output reg [15:0] min_block=0,max_block=0,
  output reg [7:0] tag=0,
  output wire available,seek_available,
@@ -42,7 +46,7 @@ module flac_album_control(
  reg [35:0] last_track=0;
  wire [64:0] cue_sample={1'b0,track_offset}+{1'b0,index_offset};
  assign seek_available=parse_state==DONE&&total_samples!=0&&min_block>=16&&max_block>=min_block;
- assign available=parse_state==DONE&&cd_cue&&!cue_bad&&track_count!=0&&total_samples!=0;
+ assign available=parse_state==DONE&&cue_seen&&cd_cue&&!cue_bad&&track_count!=0&&total_samples!=0;
  always @(posedge clk)begin
   if(reset||new_file)begin
    parse_state<=MAGIC;header<=0;header_byte<=0;block_type<=0;block_last<=0;
@@ -51,8 +55,9 @@ module flac_album_control(
    track_count<=0;cue_phase<=0;cue_byte<=0;tracks_left<=0;indexes_left<=0;
    track_offset<=0;index_offset<=0;track_number<=0;audio_track<=0;
    cd_cue<=0;cue_bad<=0;cue_seen<=0;last_track<=0;
-   total_samples<=0;min_block<=0;max_block<=0;
-  end else if(byte_valid&&enabled&&parse_state!=DONE)begin
+   total_samples<=0;sample_rate<=0;min_block<=0;max_block<=0;
+  end else begin
+   if(byte_valid&&enabled&&parse_state!=DONE)begin
    file_position<=file_position+1'b1;
    case(parse_state)
     MAGIC:begin
@@ -85,7 +90,8 @@ module flac_album_control(
       if(block_position==3)max_block<=field_next[15:0];
       if(block_position==17)begin
        total_samples<=field_next[35:0];
-       if(field_next[63:44]!=44100||field_next[43:41]!=1||field_next[40:36]!=15)cue_bad<=1;
+       sample_rate<=field_next[63:44];
+       if((field_next[63:44]!=44100&&field_next[63:44]!=48000)||field_next[43:41]!=1||field_next[40:36]!=15)cue_bad<=1;
       end
      end
      if(block_type==3)begin
@@ -125,7 +131,10 @@ module flac_album_control(
         if(cue_byte==7)index_offset<=field_next;
         if(cue_byte==8&&byte_data==1&&audio_track&&track_number>=1&&track_number<=99)begin
          if(cue_sample[64:36]!=0||track_count==99||(track_count!=0&&cue_sample[35:0]<=last_track))cue_bad<=1;
-         else begin tracks[track_count]<=cue_sample[35:0];last_track<=cue_sample[35:0];track_count<=track_count+1'b1;end
+         else begin
+          tracks[track_count]<=cue_sample[35:0];
+          last_track<=cue_sample[35:0];track_count<=track_count+1'b1;
+         end
         end
         if(cue_byte==11)begin
          cue_byte<=0;indexes_left<=indexes_left-1'b1;
@@ -144,13 +153,15 @@ module flac_album_control(
     end
     default:parse_state<=DONE;
    endcase
+   end
   end
  end
  // Synchronous table reads; scan takes only a few dozen microseconds.
  reg [6:0] track_address=0;
  reg [8:0] seek_address=0;
- reg [35:0] track_q=0;
+ reg [35:0] track_q_raw=0;
  reg [76:0] seek_q=0;
+ wire[35:0] track_q=track_q_raw;
  localparam IDLE=0,TRACK_WAIT=1,TRACK_READ=2,CHOOSE=3,SEEK_WAIT=4,SEEK_READ=5,ISSUE=6,WAIT_START=7,WAIT_LAND=8,CONVERT=9,CONVERT_START=10;
  reg [3:0] nav_state=IDLE;
  // Idle observer shares the existing cue RAM port; navigation always wins.
@@ -158,7 +169,7 @@ module flac_album_control(
  reg [1:0] monitor_state=0;
  reg [35:0] monitor_position=0,monitor_start=0;
  wire [6:0] read_track_address=nav_state==IDLE?monitor_address:track_address;
- always @(posedge clk)begin track_q<=tracks[read_track_address];seek_q<=seeks[seek_address];end
+ always @(posedge clk)begin track_q_raw<=tracks[read_track_address];seek_q<=seeks[seek_address];end
  task publish_track(input [6:0] number,input [35:0] start_value,end_value);
  begin
   current_track_valid<=end_value>start_value;
@@ -193,9 +204,11 @@ module flac_album_control(
  reg convert_start=0;
  wire convert_done,convert_busy;
  reg [34:0] requested_time=0;
- wire [47:0] converted_sample;
- media_ui_divider seek_time(.clk(clk),.ce(1'b1),.start(convert_start),
-  .numerator({13'd0,requested_time}*48'd49),.denominator(35'd400),
+wire [47:0] converted_sample;
+wire [47:0] seek_numerator=sample_rate==48000?({13'd0,requested_time}<<1):
+ (({13'd0,requested_time}<<5)+({13'd0,requested_time}<<4)+{13'd0,requested_time});
+media_ui_divider seek_time(.clk(clk),.ce(1'b1),.start(convert_start),
+  .numerator(seek_numerator),.denominator(sample_rate==48000?35'd15:35'd400),
   .busy(convert_busy),.done(convert_done),.quotient(converted_sample),.remainder());
  reg key_toggle=0,n_down=0,p_down=0,forward=0,wrap_previous=0;
  reg [35:0] request_position=0,last_start=0,previous_start=0;

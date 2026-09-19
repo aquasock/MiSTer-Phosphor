@@ -7,6 +7,7 @@ module flac_ddr_decoder #(
  input wire clk,reset,cancel,start,
  input wire resume_frame,
  input wire [35:0] resume_sample,resume_total,
+ input wire [19:0] resume_rate,
  input wire [15:0] resume_min_block,resume_max_block,
  output wire start_ready,quiescent,
  input wire[7:0] input_data,
@@ -14,6 +15,7 @@ module flac_ddr_decoder #(
  output wire input_ready,
  output wire metadata_valid,
  output wire[35:0] total_samples,
+ output wire[19:0] sample_rate,
  output wire pcm_valid,pcm_eof,
  input wire pcm_ready,
  output wire signed[15:0] pcm_left,pcm_right,
@@ -40,10 +42,10 @@ module flac_ddr_decoder #(
   else if(start&&start_ready)decoder_active<=1;
  end
  flac_stream_decoder #(.ENABLE_RESUME(ENABLE_RESUME)) decoder(.clk(clk),.reset(decoder_reset),
-  .resume_frame(resume_frame),.resume_sample(resume_sample),.resume_total(resume_total),
+  .resume_frame(resume_frame),.resume_sample(resume_sample),.resume_total(resume_total),.resume_rate(resume_rate),
   .resume_min_block(resume_min_block),.resume_max_block(resume_max_block),
   .input_data(input_data),.input_valid(input_valid),.input_end(input_end),.input_ready(internal_input_ready),
-  .metadata_valid(metadata_valid),.total_samples(total_samples),
+  .metadata_valid(metadata_valid),.total_samples(total_samples),.sample_rate(sample_rate),
   .begin_valid(begin_valid),.begin_ready(begin_ready),.frame_size(frame_size),.channel_assignment(channel_assignment),.frame_position(),
   .sample_valid(sample_valid),.sample_ready(sample_ready),.sample_channel(sample_channel),.sample_index(sample_index),.sample_data(sample_data),
   .commit_valid(commit_valid),.commit_ready(commit_ready),.store_error(store_error),.finished(finished),.error(decoder_error));

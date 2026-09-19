@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MiSTer Gapless FLAC Album Builder</title>
+  <link rel="stylesheet" href="../shared.css">
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">MiSTer-Phosphor utility</p><h1>Gapless FLAC Album Builder</h1>
+      <p class="lede">Turn individual CD-quality FLAC tracks into one continuous FLAC with an embedded CUESHEET, metadata, and artwork. Everything stays in this browser.</p></header>
+    <section id="drop" class="drop" tabindex="0" role="button" aria-label="Add FLAC tracks">
+      <strong>Drop FLAC tracks here</strong><span>or choose files in album order</span>
+      <button id="choose" type="button">Choose FLAC files</button>
+      <input id="files" type="file" accept=".flac,audio/flac" multiple hidden>
+    </section>
+    <section class="panel"><div class="panel-head"><div><h2>Track order</h2><p id="summary">No tracks added.</p></div>
+      <button id="clear" class="quiet" type="button" disabled>Clear</button></div><ol id="tracks" aria-live="polite"></ol></section>
+    <section class="panel settings">
+      <label>Output filename<span class="filename"><input id="name" value="album"><span>.flac</span></span></label>
+      <label>Compression<select id="compression"><option value="5" selected>Level 5 — balanced</option>
+        <option value="8">Level 8 — smallest, slower</option><option value="0">Level 0 — fastest, larger</option></select></label>
+    </section>
+    <section class="actions"><button id="build" class="primary" type="button" disabled>Build album FLAC</button>
+      <a id="download" class="button" hidden>Download album</a></section>
+    <section class="status" aria-live="polite"><progress id="progress" max="1" value="0"></progress>
+      <p id="status">Add two or more tracks to begin.</p></section>
+    <details><summary>Output requirements and privacy</summary>
+      <p>Inputs must be native FLAC, 44.1 kHz, 16-bit, stereo, with CD-sector-aligned lengths. The output contains a standard embedded CUESHEET, a frame-aligned SEEKTABLE, and the compact MP3A metadata/artwork block used by Phosphor. Every decoded input sample is retained in its original order; the builder never trims, pads, fades, or otherwise edits the audio. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p></details>
+  </main>
+  <script src="vendor/libflac.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

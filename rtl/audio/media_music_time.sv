@@ -1,7 +1,7 @@
 // One serial divider converts album and track sample counts to 360000 Hz.
-// 360000/44100 = 400/49; retain subsecond precision for track-relative seeks.
+// Exact reduced ratios: 44.1 kHz = 400/49, 48 kHz = 15/2.
 module media_music_time(
- input wire clk,reset,track_changed,
+ input wire clk,reset,track_changed,rate_48k,
  input wire[35:0] position,total,track_position,track_total,track_start,
  output reg[34:0] elapsed_q=0,total_q=0,track_elapsed_q=0,track_total_q=0,track_start_q=0,
  output reg track_times_valid=0
@@ -18,7 +18,8 @@ module media_music_time(
   endcase
  end
  wire [6:0] trial={remainder,quotient[47]};
- wire [6:0] difference=trial-7'd49;
+ wire [6:0] divisor=rate_48k?7'd2:7'd49;
+ wire [6:0] difference=trial-divisor;
  // Round durations and track origin upward; origin then maps back to the
  // exact starting sample in the existing floor(q*49/400) seek converter.
  wire round_up=(which==1||which==3||which==4)&&remainder!=0;
@@ -31,7 +32,9 @@ module media_music_time(
   end else if(track_changed)begin
    which<=0;count<=0;track_times_valid<=0;
   end else if(count==0)begin
-   quotient<={12'd0,sample_count}*48'd400;remainder<=0;count<=48;
+   quotient<=rate_48k?(({12'd0,sample_count}<<4)-{12'd0,sample_count}):
+    (({12'd0,sample_count}<<8)+({12'd0,sample_count}<<7)+({12'd0,sample_count}<<4));
+   remainder<=0;count<=48;
   end else if(count==49)begin
    case(which)
     0:elapsed_q<=result;1:total_q<=result;2:track_elapsed_q<=result;3:track_total_q<=result;

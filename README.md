@@ -1,77 +1,150 @@
-# Format support summary
+# MiSTer-Phosphor
 
-One core, one OSD file entry (`S0,MP3WAVFL*,Load Audio;`), content-sniffed
-by magic bytes at load time (`RIFF`→WAV, `fLaC`→FLAC, else MP3) — no
-per-format menu. All three decoders are always present in the same
-bitstream. Fixed-profile philosophy throughout: nothing outside the
-accepted profile is validated or rejected; out-of-profile input is
-undefined behavior, not a graceful error.
+An FPGA audio player and visualizer core for
+[MiSTer](https://github.com/MiSTer-devel), targeting QMTech
+DE10-Nano-compatible hardware (Cyclone V `5CSEBA6U23I7`). It plays MP3,
+Ogg Vorbis, WAV, and FLAC files; supports gapless FLAC albums and mixed-format
+TAR playlists; and renders three audio-driven visualizers with an optional
+metadata and album-art interface. Playback and visualization are implemented
+natively in FPGA logic, with no HPS software or soft CPU in the decode path.
 
-## What each format supports
+## What it does
 
-| | MP3 | WAV | FLAC |
-|---|---|---|---|
-| Container/codec | MPEG-1 Layer III | RIFF/WAVE PCM | FLAC (native RTL decode) |
-| Sample rate | 44.1 / 48 / 32 kHz | 44.1 kHz only | 44.1 kHz only |
-| Bit depth | n/a (lossy) | 16-bit only | 16-bit only |
-| Channels | mono or stereo | stereo only | stereo only |
-| Bitrate modes | CBR/VBR/ABR, all 14 standard bitrates | n/a (uncompressed) | n/a (lossless, arbitrary block sizes) |
-| Stream validation | Structural sync/bitrate/sample-rate check for frame resync only (tolerates ID3v2 tags with embedded cover art); no CRC check | None — `fmt`/`data` chunks parsed structurally, fields never validated | Requires literal `fLaC` magic at byte 0; no resync/decoy tolerance |
-| Album/track navigation | n/a | n/a | Embedded CUESHEET: previous/next track, seek, pause/resume, and album repeat |
-| Audio output path | Multi-rate FIFO path (`mp3_pcm_pack`→`audio_pcm_fifo`→`audio_pcm_output_adapter`), no backpressure | Fixed-44.1kHz native-audio rail (`PLAYER_PCM_*`), real backpressure | Same native-audio rail as WAV, via `flac_pcm_landing` |
-| External DDR use | None | None | Yes — `flac_frame_store` double-buffers decoded frames in DDR (only DDR client in this core) |
+- **Four native audio decoders** — MPEG-1 Layer III MP3, Ogg Vorbis, PCM WAV,
+  and native FLAC decoding are present together in one bitstream. Files are
+  identified from their contents after selection rather than by separate core
+  modes.
+- **Standalone file playback** — opens an individual `.mp3`, `.ogg`, `.wav`,
+  or `.flac` file with pause/resume, direct seeking, a proportional progress
+  bar, and automatic repeat.
+- **Gapless FLAC albums** — opens a single FLAC containing an embedded standard
+  CUESHEET and the project's compact display metadata. Tracks share one
+  continuous decoded sample stream, enabling gapless track changes, cyclic
+  last-to-first playback, previous/next navigation, seeking, metadata, and
+  album artwork.
+- **Mixed-format TAR playlists** — opens an uncompressed POSIX USTAR archive
+  containing ordinary MP3, Ogg, WAV, and FLAC files plus a standard extended
+  M3U playlist. The M3U controls playback order regardless of TAR member order.
+  Mixed playlists support as many as 255 tracks, previous/next navigation,
+  album and artist text, per-track titles, and optional album artwork. Original
+  audio members remain byte-for-byte recoverable with ordinary TAR software.
+- **Transport and library UI** — a progress/time overlay is available for all
+  playable files. Album modes add a three-panel display with album artwork,
+  album/artist/title information, and a six-row playlist. Long selected titles
+  and metadata fields scroll horizontally; unused rows remain hidden.
+- **Three visualizers** — Waveforms provides dual time-domain traces, FFT shows
+  a spectrum with peak hold, and O-Scope interprets the stereo channels as X/Y
+  beam coordinates with phosphor persistence. The native scene feeds both HDMI
+  and analog video paths before output-specific processing.
+- **Native-rate output** — supported 44.1 and 48 kHz material follows the
+  corresponding audio clock family instead of being forced through one fixed
+  output rate. HDMI, analog audio, and S/PDIF use the MiSTer platform output
+  paths.
 
-**Explicitly out of scope / not supported by any format**: MPEG-2/2.5 LSF
-(8–24 kHz MP3), dual-channel MP3 mode, free-format MP3 bitstreams, any
-sample rate other than the table above, any bit depth other than 16-bit,
-mono/multichannel WAV or FLAC, compressed WAV (ADPCM etc.), seek/pause/
-playlist beyond load-and-play for MP3/WAV.
+## Controls
 
-## Build a FLAC album in Chrome
+Playback hotkeys operate while the MiSTer OSD is closed.
 
-Open [`tools/flac_album_builder/index.html`](tools/flac_album_builder/index.html)
-in a current desktop Chrome-compatible browser. Add 44.1 kHz, 16-bit stereo
-FLAC tracks, arrange their order, and download one MiSTer_MP3-compatible FLAC
-with embedded CUESHEET and SEEKTABLE metadata. Processing remains local to the
-browser; the files are not uploaded.
+| Key | Action |
+| --- | --- |
+| `Space` | Play or pause |
+| `Left` / `Right` | Seek backward or forward 10 seconds |
+| `Ctrl` + `Left` / `Right` | Seek backward or forward 30 seconds |
+| `Ctrl` + `Alt` + `Left` / `Right` | Seek backward or forward 60 seconds |
+| `F1`–`F8` | Seek to 0/8 through 7/8 of the current file or track |
+| `N` / `P` | Next or previous track in an album or TAR playlist |
+| `I` | Show or hide album artwork, metadata, and playlist panels |
+| `V` | Cycle Waveforms, FFT, and O-Scope visualizers |
+| `A` | Toggle standard and widescreen presentation |
 
-See [`tools/flac_album_builder/README.md`](tools/flac_album_builder/README.md)
-for input constraints and the exported-file validator.
+Previous/next controls and the three-panel library UI are intentionally absent
+for standalone files because no playlist exists in that mode.
 
-To reverse the process, open
-[`tools/flac_album_splitter/index.html`](tools/flac_album_splitter/index.html).
-It reads the embedded CUESHEET and produces individually downloadable FLAC
-tracks plus a single ZIP containing all tracks.
+## Current limitations
 
-## Resource usage (Cyclone V 5CSEBA6U23I7, full board-level design)
+This is a deliberately bounded hardware implementation rather than a
+general-purpose software codec stack. WAV and FLAC input must be 16-bit stereo
+at 44.1 or 48 kHz. MP3 support targets MPEG-1 Layer III mono or stereo at 32,
+44.1, or 48 kHz using the standard bitrate modes; MPEG-2/2.5 LSF, free-format,
+and dual-channel streams are outside the current profile. Ogg support targets
+stereo Vorbis at 44.1 or 48 kHz within the setup limits implemented by the
+hardware decoder.
 
-| Stage | ALMs | % | Registers | M10K blocks | DSP blocks | PLLs |
-|---|---|---|---|---|---|---|
-| MP3 only (pre-unification) | 11,271 | 27% | ~15,038 | — | — | 3 |
-| + WAV (Stage 1) | 11,577 | 28% | — | — | — | 3 |
-| + FLAC (Stage 2, current) | 13,512 | 32% | 16,686 | 191/553 (35%) | 67/112 (60%) | 4/6 (67%) |
+Mixed TAR track transitions reset and start the decoder selected for the next
+ordinary file, so they are not guaranteed gapless. Use a continuous embedded-
+CUESHEET FLAC album when sample-continuous or cyclic playback matters. TAR
+archives must be uncompressed USTAR, not TAR.GZ, TAR.XZ, ZIP, or 7z. JPEG and
+PNG decoding is not implemented on the FPGA; the browser builder converts an
+optional cover to the core's fixed 92×92 RGB332 `cover.art` representation.
 
-FLAC's LPC/prediction engine, Rice/CRC processing, and DDR interface
-account for the largest single jump (+1,947 ALMs). Comfortably within
-budget on this device at every stage; DSP usage (60%) is the tightest
-resource, driven mostly by the standard MiSTer video-scaler framework
-(`ascal`), not the audio decoders themselves.
+## Installation
 
-## Timing
+Copy the dated release RBF to MiSTer's `_Other` directory and place audio in
+the core's games directory:
 
-**Fully closed — zero violations of any kind** (setup, hold, recovery,
-removal, minimum pulse width) across every clock domain, confirmed via
-real Quartus `quartus_map`/`fit`/`sta`/`asm` (0 errors).
+```text
+/media/fat/_Other/Phosphor_YYYYMMDD.rbf
+/media/fat/games/Phosphor/
+```
 
-| Check | Worst-case slack |
-|---|---|
-| Setup | 0.466 ns |
-| Hold | 0.252 ns |
-| Recovery | 3.860 ns |
-| Removal | 0.519 ns |
+Select **Phosphor** under `_Other`, open the MiSTer OSD, choose **Load Audio**,
+and select a supported standalone file, FLAC album, or TAR playlist.
 
-The only nontrivial timing work was closing async-reset-into-CDC-
-synchronizer paths feeding `media_native_audio` (the WAV/FLAC audio rail)
-from this core's own reset/new-file/format-dispatch logic — resolved via
-`set_false_path` exceptions in `MiSTer_MP3.sdc`, not RTL changes. Full
-history in `docs/MP3.md`.
+## Building
+
+The project targets Quartus Prime 17.0.2 Lite and the Cyclone V
+`5CSEBA6U23I7`. Open `MiSTer-Phosphor.qpf`, or build from a Quartus command
+shell with:
+
+```sh
+quartus_sh --flow compile MiSTer-Phosphor
+```
+
+`files.qip`, the complete `rtl/` and `sys/` trees, and all referenced `.hex`
+and `.mem` initialization files must be present. `sys/build_id.tcl` generates
+`build_id.v` automatically before compilation.
+
+The design is close to the device's physical M10K and DSP limits, and fitter
+placement materially affects timing closure. Release candidates therefore use
+three independent fitter seeds and publish the passing result with the best
+timing margin rather than relying on one fixed seed.
+
+## Preparing media
+
+Open `tools/media-builder/index.html` in a current Chromium-based browser.
+The companion application performs all work locally and provides two modes:
+
+- **Mixed Playlist TAR** packages as many as 255 original MP3, Ogg, WAV, and
+  FLAC files with a standard M3U, display metadata, and optional artwork. Audio
+  payloads are not decoded, transcoded, or modified.
+- **Gapless FLAC Album** losslessly joins as many as 99 compatible FLAC tracks
+  into one continuous FLAC with an embedded CUESHEET, SEEKTABLE, display
+  metadata, and artwork. Every decoded source sample is retained in order.
+
+Neither format requires a proprietary extractor. Mixed-playlist files can be
+recovered with ordinary TAR software, while the gapless album remains a
+standards-compliant FLAC with an embedded CUESHEET.
+
+## Source layout
+
+- `MiSTer-Phosphor.sv` — core integration, format dispatch, playlist control,
+  transport, and MiSTer-facing configuration.
+- `rtl/` — audio decoders, visualizers, metadata/container parsers, UI, and
+  platform-specific audio control.
+- `sys/` — standard MiSTer framework, scaler, video, audio, HPS I/O, and
+  top-level platform wrapper.
+- `tools/media-builder/` — self-contained local browser application for creating
+  supported albums and playlists.
+
+## License
+
+Original project code is distributed under the GNU General Public License
+version 2 or later, matching MiSTer-Raster and allowing original project code
+to be shared between the two projects. Because each combined design includes
+MiSTer framework modules under GPL version 3 or later, distribute the complete
+source and RBF under GPL-3.0-or-later. LGPL and Intel/Altera-generated
+components retain their respective upstream terms and notices.
+
+See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for component provenance and
+redistribution guidance. Full license texts are provided in `COPYING`,
+`COPYING.GPL2`, and `COPYING.LESSER`.

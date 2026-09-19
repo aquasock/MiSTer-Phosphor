@@ -41,6 +41,7 @@ module spdif #(parameter SAMPLE_RATE=48000)
     // For 44.1KHz, 44100×32×2×2 = 5,644,800Hz
     // For 48KHz,   48000×32×2×2 = 6,144,000Hz
     input           bit_out_en_i,
+    input           sample_rate_44k_i,
 
     // Output
     output          spdif_o,
@@ -176,7 +177,7 @@ begin
         channel_status_bit_r = 1'b1;
     else if (subframe_count_q[8:1] == 8'd15) // frame 15 => 0 = no indication, 1 = original media
         channel_status_bit_r = 1'b1;
-    else if (subframe_count_q[8:1] == 8'd25 && SAMPLE_RATE!=44100) // frame 24 to 27 => sample frequency, 0100 = 48kHz, 0000 = 44kHz (l2r)
+    else if (subframe_count_q[8:1] == 8'd25 && !sample_rate_44k_i) // frame 24 to 27 => sample frequency, 0100 = 48kHz, 0000 = 44kHz (l2r)
         channel_status_bit_r = 1'b1;
     else
         channel_status_bit_r = 1'b0; // everything else defaults to 0        

@@ -36,7 +36,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_output_adapter.sv
 
 # sys/sys_top.v (copied from the sibling MiSTer-Phosphor project along with
-# the rest of sys/ -- see MiSTer_MP3.sv's header comment) directly
+# the rest of sys/ -- see MiSTer-Phosphor.sv's header comment) directly
 # instantiates a handful of Phosphor-specific modules for its own Menu
 # music-passthrough and OSD-visualizer features. This standalone core
 # doesn't participate in either, but still needs *something* satisfying
@@ -68,6 +68,19 @@ set_global_assignment -name HEX_FILE rtl/media_fft_band_end.hex
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_player_overlay.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_flac_album_ui.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_album_ui_toggle.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_hotkey_options.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_session_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_tar_index.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_m3u_index.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_playlist_resolver.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_m3u_metadata.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pause_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_duration_estimator.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_pcm_landing_q.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ogg_tail_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ogg_seek_scan.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_mp3_xing_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_mp3_seek_offset.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_keyboard_control.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/media_music_time.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/media_ui_state.sv
@@ -139,7 +152,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_audio_seq
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_audio_decoder.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_stream_decoder.sv
 
-set_global_assignment -name SYSTEMVERILOG_FILE MiSTer_MP3.sv
+set_global_assignment -name SYSTEMVERILOG_FILE MiSTer-Phosphor.sv
 
 # Project-specific timing constraints (see the file's own header for what
 # it does and why): loaded after sys/sys_top.sdc, whose own clock-group
@@ -147,4 +160,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE MiSTer_MP3.sv
 # files above, whose own accompanying constraints (never copied over from
 # MiSTer-Phosphor's MediaPlayer.sdc until this point) it ports the relevant
 # parts of.
-set_global_assignment -name SDC_FILE MiSTer_MP3.sdc
+set_global_assignment -name SDC_FILE MiSTer-Phosphor.sdc

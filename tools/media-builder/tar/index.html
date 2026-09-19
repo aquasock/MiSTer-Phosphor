@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MiSTer Mixed Playlist Builder</title><link rel="stylesheet" href="../shared.css"></head><body><main>
+<header><p class="eyebrow">MiSTer-Phosphor utility</p><h1>Mixed Playlist Builder</h1>
+<p class="lede">Package MP3, Ogg Vorbis, FLAC, and WAV files as a byte-preserving TAR playlist. Everything stays in this browser.</p></header>
+<section id="drop" class="drop" tabindex="0"><strong>Drop audio files here</strong><span>or choose files in playlist order</span>
+<div class="pickers"><button id="choose" type="button">Choose audio files</button><button id="openTar" class="quiet" type="button">Open playlist TAR</button></div>
+<input id="files" type="file" accept=".mp3,.ogg,.flac,.wav,audio/*" multiple hidden><input id="tarFile" type="file" accept=".tar,application/x-tar" hidden></section>
+<section class="panel"><div class="panel-head"><div><h2>Playlist order</h2><p id="summary">No tracks added.</p></div>
+<button id="clear" class="quiet" type="button" disabled>Clear</button></div><ol id="tracks"></ol></section>
+<section class="panel settings"><label>Album / playlist title<input id="name" value="playlist"></label>
+<label>Album artist<input id="artist" placeholder="Unknown artist"></label>
+<label>Album artwork<span class="art-picker"><input id="cover" type="file" accept="image/*"><canvas id="coverPreview" width="92" height="92" aria-label="Artwork preview"></canvas></span></label></section>
+<section class="actions"><button id="build" class="primary" type="button" disabled>Build playlist TAR</button>
+<a id="download" class="button" hidden>Download playlist</a></section><p id="status" class="status">Add one or more tracks to begin.</p>
+<details><summary>Format and privacy</summary><p>The standard uncompressed TAR contains playlist.m3u, the original audio files, and optional 92×92 RGB332 cover artwork. TAR member order does not matter; the M3U controls playback order. Existing playlists made here can be reopened and edited. Audio bytes are never decoded, re-encoded, or modified. No files are uploaded. Track changes are not gapless.</p></details>
+</main><script src="app.js"></script></body></html>

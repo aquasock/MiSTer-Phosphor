@@ -2,7 +2,7 @@
 // Movie processing stays on movie_clock; only external output selection changes.
 module media_native_audio(
  input wire refclk,config_clk,wr_clk,reset,movie_clock,
- input wire want_cd,paused,movie_96k,
+ input wire want_cd,paused,movie_96k,native_48k,
  input wire[4:0] attenuation,
  input wire pcm_reset,pcm_valid,
  input wire[32:0] pcm_data,
@@ -26,8 +26,12 @@ module media_native_audio(
  wire[7:0] cfg_ref,cfg_cd;
  video_config_cdc #(.WIDTH(8)) config_ref(.src_clk(config_clk),.dst_clk(refclk),.src_data({want_cd,paused,movie_96k,attenuation}),.dst_data(cfg_ref));
  video_config_cdc #(.WIDTH(8)) config_cd(.src_clk(config_clk),.dst_clk(cd_clock),.src_data({want_cd,paused,movie_96k,attenuation}),.dst_data(cfg_cd));
+ wire native_48k_ref;
+ video_config_cdc #(.WIDTH(1)) rate_ref(.src_clk(config_clk),.dst_clk(refclk),.src_data(native_48k),.dst_data(native_48k_ref));
+ wire native_48k_cd;
+ video_config_cdc #(.WIDTH(1)) rate_cd(.src_clk(config_clk),.dst_clk(cd_clock),.src_data(native_48k),.dst_data(native_48k_cd));
  wire select_cd,mute,cd_ready,config_error,cd_locked;
- media_audio_clocks clocks(.refclk(refclk),.reset(ref_reset_sync[2]),.movie_clock(movie_clock),.select_cd(select_cd),.enable(1'b1),
+ media_audio_clocks clocks(.refclk(refclk),.reset(ref_reset_sync[2]),.movie_clock(movie_clock),.select_cd(select_cd),.cd_48k(native_48k_ref),.enable(1'b1),
   .cd_clock(cd_clock),.cd_locked(cd_locked),.output_clock(output_mclk));
  // Ready comes from edges of the actual selected clock, with a matching mode
  // echo; neither a requested mode nor PLL lock alone acknowledges a handoff.
@@ -60,7 +64,7 @@ module media_native_audio(
  wire movie_idle_ref,cd_idle_ref,cd_idle;
  video_config_cdc #(.WIDTH(1)) movie_idle_cdc(.src_clk(movie_clock),.dst_clk(refclk),.src_data(movie_muted&&movie_quiet>=2),.dst_data(movie_idle_ref));
  video_config_cdc #(.WIDTH(1)) cd_idle_cdc(.src_clk(cd_clock),.dst_clk(refclk),.src_data(cd_idle),.dst_data(cd_idle_ref));
- media_hdmi_audio_control #(.DRAIN_CYCLES(2048)) control(.clk(refclk),.reset(ref_reset_sync[2]),.want_cd(cfg_ref[7]),.movie_96k(cfg_ref[5]),
+ media_hdmi_audio_control #(.DRAIN_CYCLES(2048)) control(.clk(refclk),.reset(ref_reset_sync[2]),.want_cd(cfg_ref[7]),.movie_96k(cfg_ref[5]),.native_48k(native_48k_ref),
   .clients_idle(select_cd?cd_idle_ref:movie_idle_ref),.clock_ready(clock_status[1]),.clock_applied_cd(clock_status[0]),
   .clock_cd(select_cd),.mute(mute),.cd_ready(cd_ready),.error(config_error),
   .pad_scl(pad_scl),.pad_sda(pad_sda),.hps_scl_low(hps_scl_low),.hps_sda_low(hps_sda_low),
@@ -128,7 +132,8 @@ module media_native_audio(
  assign visual_left=cd_left;assign visual_right=cd_right;
  reg[1:0] spdif_div=0;
  always @(posedge cd_clock)if(rd_reset_sync[2])spdif_div<=0;else spdif_div<=spdif_div+1'b1;
- spdif #(.SAMPLE_RATE(44100)) music_spdif(.clk_i(cd_clock),.rst_i(rd_reset_sync[2]),.bit_out_en_i(spdif_div==0),.sample_i({cd_right,cd_left}),.spdif_o(cd_spdif),.sample_req_o());
+ spdif #(.SAMPLE_RATE(44100)) music_spdif(.clk_i(cd_clock),.rst_i(rd_reset_sync[2]),.bit_out_en_i(spdif_div==0),
+  .sample_rate_44k_i(!native_48k_cd),.sample_i({cd_right,cd_left}),.spdif_o(cd_spdif),.sample_req_o());
  sigma_delta_dac #(15) music_dac_l(.CLK(cd_clock),.RESET(rd_reset_sync[2]),.DACin({~cd_left[15],cd_left[14:0]}),.DACout(cd_dac_l));
  sigma_delta_dac #(15) music_dac_r(.CLK(cd_clock),.RESET(rd_reset_sync[2]),.DACin({~cd_right[15],cd_right[14:0]}),.DACout(cd_dac_r));
  // Give every serializer two more complete sample intervals to retire EOF.

@@ -6,7 +6,7 @@ module media_audio_rate_control #(
  parameter integer QUIET_CYCLES=500000,
  parameter integer DRAIN_CYCLES=1
 )(
- input wire clk,reset,want_cd,movie_96k,
+ input wire clk,reset,want_cd,movie_96k,native_48k,
  input wire clients_idle,clock_ready,clock_applied_cd,hps_changed,
  input wire config_ready,config_done,config_error,
  output reg clock_cd,
@@ -20,7 +20,7 @@ module media_audio_rate_control #(
  localparam DW=$clog2(DRAIN_CYCLES+1);
  reg[DW-1:0] drain_count=0;
  reg dirty;reg[QW-1:0] quiet_count;
- wire[1:0] wanted_mode=want_cd?2'd1:movie_96k?2'd2:2'd0;
+ wire[1:0] wanted_mode=want_cd?(native_48k?2'd0:2'd1):movie_96k?2'd2:2'd0;
  assign mute=state!=RUN||want_cd!=clock_cd||(want_cd&&(hps_changed||!clock_ready||clock_applied_cd!=clock_cd));
  assign cd_ready=want_cd&&clock_cd&&!mute&&!error;
  assign config_request=state==ISSUE;

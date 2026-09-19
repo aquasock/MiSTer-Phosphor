@@ -114,6 +114,7 @@ spdif toslink
 
 	.clk_i(clk),
 	.bit_out_en_i(mclk_ce),
+	.sample_rate_44k_i(1'b0),
 
 	.sample_i({ar,al}),
 	.spdif_o(spdif)

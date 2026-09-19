@@ -5,7 +5,7 @@ module media_player_overlay(
  input wire [34:0] subtitle_command,output wire subtitle_ack,
  output wire [13:0] metadata_address,input wire [7:0] metadata_data,
  input wire metadata_valid,metadata_artwork_valid,metadata_title_long,
- input wire [6:0] metadata_track_count,metadata_current_track,
+ input wire [7:0] metadata_track_count,metadata_current_track,
  input wire [23:0] rgb,input wire hs,vs,de,
  input wire layout_de,
  output wire [23:0] rgb_out,output wire hs_out,vs_out,de_out
@@ -19,17 +19,17 @@ wire scene_ce=scene_phase==0;
 wire [90:0] state_hdmi;
 video_config_cdc #(.WIDTH(91)) player_ui_config(
  .src_clk(control_clk),.dst_clk(video_clk),.src_data(control_state),.dst_data(state_hdmi));
-wire [16:0] metadata_video;
-video_config_cdc #(.WIDTH(17)) player_metadata_config(
+wire [18:0] metadata_video;
+video_config_cdc #(.WIDTH(19)) player_metadata_config(
  .src_clk(control_clk),.dst_clk(video_clk),
  .src_data({metadata_valid,metadata_artwork_valid,metadata_title_long,metadata_track_count,metadata_current_track}),
  .dst_data(metadata_video));
 wire [23:0] album_rgb;
 wire album_hs,album_vs,album_de;
 media_flac_album_ui album_ui(
- .clk(video_clk),.enabled(state_hdmi[72]),
- .metadata_valid(metadata_video[16]),.artwork_valid(metadata_video[15]),.current_title_long(metadata_video[14]),
- .track_count(metadata_video[13:7]),.current_track(metadata_video[6:0]),
+ .clk(video_clk),.enabled(state_hdmi[72]),.widescreen(state_hdmi[71]),
+ .metadata_valid(metadata_video[18]),.artwork_valid(metadata_video[17]),.current_title_long(metadata_video[16]),
+ .track_count(metadata_video[15:8]),.current_track(metadata_video[7:0]),
  .metadata_address(metadata_address),.metadata_data(metadata_data),
  .rgb(rgb),.hs(hs),.vs(vs),.de(de),.layout_de(layout_de),
  .rgb_out(album_rgb),.hs_out(album_hs),.vs_out(album_vs),.de_out(album_de));

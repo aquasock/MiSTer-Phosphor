@@ -6,6 +6,7 @@ module vorbis_header_parser(
  input wire packet_start,input wire packet_end,input wire packet_enable,output wire packet_ready,
  output reg identification_valid=0,output reg headers_valid=0,
  output reg [7:0] channels=0,output reg [31:0] sample_rate=0,
+ output reg [31:0] bitrate_nominal=0,
  output reg [11:0] blocksize_short=0,blocksize_long=0,
  output reg [1:0] header_number=0,output reg error=0
 );
@@ -24,7 +25,7 @@ module vorbis_header_parser(
  endfunction
  always @(posedge clk)begin
   if(reset)begin
-   identification_valid<=0;headers_valid<=0;channels<=0;sample_rate<=0;
+   identification_valid<=0;headers_valid<=0;channels<=0;sample_rate<=0;bitrate_nominal<=0;
    blocksize_short<=0;blocksize_long<=0;header_number<=0;index<=0;packet_bad<=0;error<=0;
   end else if(packet_valid&&packet_enable&&!headers_valid)begin
    if(packet_start)begin index<=0;packet_bad<=0;end
@@ -37,6 +38,8 @@ module vorbis_header_parser(
      11:begin channels<=packet_data;if(packet_data==0||packet_data>2)packet_bad<=1;end
      12:sample_rate[7:0]<=packet_data;13:sample_rate[15:8]<=packet_data;
      14:sample_rate[23:16]<=packet_data;15:sample_rate[31:24]<=packet_data;
+     20:bitrate_nominal[7:0]<=packet_data;21:bitrate_nominal[15:8]<=packet_data;
+     22:bitrate_nominal[23:16]<=packet_data;23:bitrate_nominal[31:24]<=packet_data;
      28:begin short_exp<=packet_data[3:0];long_exp<=packet_data[7:4];
       if(packet_data[3:0]<6||packet_data[7:4]<packet_data[3:0]||packet_data[7:4]>11)packet_bad<=1;
      end
