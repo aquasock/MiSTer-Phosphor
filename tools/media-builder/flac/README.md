@@ -9,10 +9,15 @@ It injects a standard embedded CUESHEET, a frame-aligned SEEKTABLE with at most
 512 points, and MiSTer_MP3's compact MP3A display metadata and artwork. It never
 trims, pads, fades, or otherwise edits the audio.
 
-The MP3A block carries the first available album title and album artist, each
-track title, and converted cover artwork. Missing fields use filenames or
-generic fallbacks. The FPGA truncates display text with an ellipsis where
-necessary.
+The MP3A block carries the album title, album artist, each track title, and
+converted cover artwork. The **Album title**, **Album artist**, and **Album
+artwork** fields match those of the mixed playlist builder. They are prefilled
+from the first source track that has an album tag, an album-artist (or artist)
+tag, and an embedded picture, and stay in sync as tracks are added, removed, or
+reordered until you edit them. Typing a value or choosing an image file
+overrides the tags; emptying a text field returns it to the tags, and Clear
+resets all three. Missing fields use filenames or generic fallbacks. The FPGA
+truncates display text with an ellipsis where necessary.
 
 Inputs must use the MiSTer_MP3 profile: 44.1 kHz, 16-bit, stereo. CD CUESHEET
 track offsets must be divisible by 588 samples, so the app rejects

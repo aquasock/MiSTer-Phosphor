@@ -1,11 +1,11 @@
 (() => {
   "use strict";
   const RATE=44100,CHANNELS=2,BPS=16,CD_FRAME=588,MAX_TRACKS=99,MAX_SEEKS=512;
-  const state={tracks:[],output:null,outputUrl:null,busy:false};
+  const state={tracks:[],output:null,outputUrl:null,busy:false,art:null,albumEdited:false,artistEdited:false,artEdited:false};
   const $=id=>document.getElementById(id);
   const ui={drop:$("drop"),choose:$("choose"),files:$("files"),tracks:$("tracks"),summary:$("summary"),
-    clear:$("clear"),build:$("build"),download:$("download"),name:$("name"),
-    compression:$("compression"),progress:$("progress"),status:$("status")};
+    clear:$("clear"),build:$("build"),download:$("download"),name:$("name"),album:$("album"),artist:$("artist"),
+    cover:$("cover"),coverPreview:$("coverPreview"),compression:$("compression"),progress:$("progress"),status:$("status")};
   const readU24=(a,o)=>(a[o]<<16)|(a[o+1]<<8)|a[o+2];
   const readU32LE=(a,o)=>(a[o]|(a[o+1]<<8)|(a[o+2]<<16)|(a[o+3]<<24))>>>0;
   const readU32BE=(a,o)=>((a[o]<<24)|(a[o+1]<<16)|(a[o+2]<<8)|a[o+3])>>>0;
@@ -52,8 +52,20 @@
   function setStatus(text,value=0,max=1){ui.status.textContent=text;ui.progress.max=max;ui.progress.value=value}
   function invalidate(){if(state.outputUrl)URL.revokeObjectURL(state.outputUrl);state.output=null;state.outputUrl=null;ui.download.hidden=true}
   function move(from,to){const x=state.tracks.splice(from,1)[0];state.tracks.splice(to,0,x);invalidate();refresh()}
+  function showCover(bytes){
+    const context=ui.coverPreview.getContext("2d"),image=context.createImageData(92,92);
+    for(let i=0;i<8464;i++){const value=bytes?bytes[i]:0,j=i*4;image.data[j]=((value>>5)&7)*255/7;image.data[j+1]=((value>>2)&7)*255/7;image.data[j+2]=(value&3)*255/3;image.data[j+3]=255}
+    context.putImageData(image,0,0);
+  }
+  // Album fields follow the source tracks' tags until the user edits them.
+  function autofill(){
+    const first=(...keys)=>{for(const key of keys){const found=state.tracks.map(t=>t.tags&&t.tags[key]).find(Boolean);if(found)return found}return ""};
+    if(!state.albumEdited)ui.album.value=first("album");
+    if(!state.artistEdited)ui.artist.value=first("albumartist","artist");
+    if(!state.artEdited){state.art=state.tracks.map(t=>t.art).find(Boolean)||null;showCover(state.art)}
+  }
   function refresh(){
-    ui.tracks.replaceChildren();
+    autofill();ui.tracks.replaceChildren();
     state.tracks.forEach((track,index)=>{
       const li=document.createElement("li");li.className="track"+(track.error?" error":"");
       const body=document.createElement("div"),name=document.createElement("span"),meta=document.createElement("span");
@@ -73,13 +85,16 @@
     ui.summary.textContent=state.tracks.length?(state.tracks.length+" track"+(state.tracks.length===1?"":"s")+" · "+time(seconds)+" total"):"No tracks added.";
     ui.build.disabled=state.busy||!valid;ui.clear.disabled=state.busy||!state.tracks.length;
     ui.name.disabled=state.busy;ui.compression.disabled=state.busy;
+    ui.album.disabled=state.busy;ui.artist.disabled=state.busy;ui.cover.disabled=state.busy;
   }
   async function add(files){
     if(state.busy)return;const list=[...files],remaining=MAX_TRACKS-state.tracks.length;
     for(const file of list.slice(0,remaining)){const track={file:file,error:null,samples:0,duration:0};
       state.tracks.push(track);refresh();
       try{const bytes=new Uint8Array(await file.arrayBuffer());Object.assign(track,inspect(bytes))}
-      catch(error){track.error=error.message||String(error)}refresh();}
+      catch(error){track.error=error.message||String(error)}
+      if(track.picture)track.art=await toRgb332(new Blob([track.picture.data],{type:track.picture.mime})).catch(error=>{console.warn("Cover art could not be converted",error);return null});
+      refresh();}
     setStatus(list.length>remaining?"Only "+MAX_TRACKS+" CUE tracks are supported.":
       state.tracks.some(t=>t.error)?"Remove incompatible tracks before building.":"Ready to build.");
   }
@@ -119,20 +134,18 @@
     .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...")
     .replace(/[\u0000-\u001f\u007f-\uffff]/g," ").trim()}
   function putText(out,offset,value,length){const bytes=new TextEncoder().encode(cleanText(value));out.set(bytes.subarray(0,length),offset)}
-  async function artwork(picture){const pixels=new Uint8Array(92*92);if(!picture)return{pixels,valid:false};
-    try{const image=await createImageBitmap(new Blob([picture.data],{type:picture.mime})),canvas=document.createElement("canvas");canvas.width=92;canvas.height=92;
-      const ctx=canvas.getContext("2d",{alpha:false});ctx.fillStyle="#000";ctx.fillRect(0,0,92,92);
-      const scale=Math.min(92/image.width,92/image.height),w=Math.max(1,Math.round(image.width*scale)),h=Math.max(1,Math.round(image.height*scale));
-      ctx.drawImage(image,(92-w)>>1,(92-h)>>1,w,h);image.close();const rgba=ctx.getImageData(0,0,92,92).data;
-      for(let i=0;i<pixels.length;i++)pixels[i]=(rgba[i*4]&0xe0)|((rgba[i*4+1]>>3)&0x1c)|(rgba[i*4+2]>>6);
-      return{pixels,valid:true}}catch(error){console.warn("Cover art could not be converted",error);return{pixels,valid:false}}}
-  function albumApplication(tracks,art){const data=new Uint8Array(11704);data.set([77,80,51,65,2,tracks.length,art.valid?1:0,0]);
-    const first=key=>tracks.map(t=>t.tags&&t.tags[key]).find(Boolean)||"";
-    const album=cleanText(first("album")||"Untitled Album"),artist=cleanText(first("albumartist")||first("artist")||"Unknown Artist");
+  async function toRgb332(blob){const pixels=new Uint8Array(92*92),image=await createImageBitmap(blob),canvas=document.createElement("canvas");canvas.width=92;canvas.height=92;
+    const ctx=canvas.getContext("2d",{alpha:false});ctx.fillStyle="#000";ctx.fillRect(0,0,92,92);
+    const scale=Math.min(92/image.width,92/image.height),w=Math.max(1,Math.round(image.width*scale)),h=Math.max(1,Math.round(image.height*scale));
+    ctx.drawImage(image,(92-w)>>1,(92-h)>>1,w,h);image.close();const rgba=ctx.getImageData(0,0,92,92).data;
+    for(let i=0;i<pixels.length;i++)pixels[i]=(rgba[i*4]&0xe0)|((rgba[i*4+1]>>3)&0x1c)|(rgba[i*4+2]>>6);
+    return pixels}
+  function albumApplication(tracks,meta){const data=new Uint8Array(11704);data.set([77,80,51,65,2,tracks.length,meta.art?1:0,0]);
+    const album=cleanText(meta.album)||"Untitled Album",artist=cleanText(meta.artist)||"Unknown Artist";
     putText(data,8,album,31);data[39]=Math.min(album.length,31);
     putText(data,40,artist,31);data[71]=Math.min(artist.length,31);
     tracks.forEach((track,i)=>{const title=cleanText((track.tags&&track.tags.title)||track.file.name.replace(/\.flac$/i,""))||"UNTITLED";
-      putText(data,72+i*32,title,31);data[72+i*32+31]=Math.min(title.length,31)});data.set(art.pixels,3240);return data}
+      putText(data,72+i*32,title,31);data[72+i*32+31]=Math.min(title.length,31)});if(meta.art)data.set(meta.art,3240);return data}
   function injectMetadata(encoded,frames,starts,total,application){const parsed=metadataEnd(encoded),prefix=encoded.slice(0,parsed.audio);
     prefix[parsed.lastHeader]&=127;const seeks=block(3,seekTable(frames,parsed.audio)),app=block(2,application),cue=block(5,cueSheet(starts,total),true);
     return join([prefix,seeks,app,cue,encoded.subarray(parsed.audio)],prefix.length+seeks.length+app.length+cue.length+encoded.length-parsed.audio)}
@@ -153,11 +166,10 @@
         await new Promise(requestAnimationFrame);const bytes=new Uint8Array(await track.file.arrayBuffer());
         decode(bytes,(pcm,samples)=>Flac.FLAC__stream_encoder_process_interleaved(enc,pcm,samples));}
       const finalProgress=state.tracks.length;setStatus("Embedding CUESHEET, metadata, and artwork…",finalProgress,finalProgress+1);
-      const cover=await artwork(state.tracks.map(t=>t.picture).find(Boolean));
       if(!Flac.FLAC__stream_encoder_finish(enc)){const code=Flac.FLAC__stream_encoder_get_state(enc);
         Flac.FLAC__stream_encoder_delete(enc);throw Error("Encoder finish failed ("+code+").")}
       const base=(ui.name.value.trim()||"album").replace(/[\\/:*?"<>|]+/g,"_");Flac.FLAC__stream_encoder_delete(enc);
-      const encoded=join(chunks,bytesWritten),album=injectMetadata(encoded,frames,starts,total,albumApplication(state.tracks,cover));
+      const encoded=join(chunks,bytesWritten),album=injectMetadata(encoded,frames,starts,total,albumApplication(state.tracks,{album:ui.album.value,artist:ui.artist.value,art:state.art}));
       inspect(album);state.output=new Blob([album],{type:"audio/flac"});state.outputUrl=URL.createObjectURL(state.output);
       ui.download.download=base+".flac";ui.download.href=state.outputUrl;ui.download.hidden=false;
       setStatus("Album ready: "+size(album.length)+" · "+state.tracks.length+" tracks · "+time(total/RATE)+" · all samples preserved",1,1);
@@ -165,7 +177,13 @@
     finally{state.busy=false;refresh()}
   }
   ui.choose.onclick=()=>ui.files.click();ui.files.onchange=()=>{add(ui.files.files);ui.files.value=""};
-  ui.clear.onclick=()=>{state.tracks=[];invalidate();refresh();setStatus("Add two or more tracks to begin.")};
+  ui.clear.onclick=()=>{state.tracks=[];state.albumEdited=state.artistEdited=state.artEdited=false;invalidate();refresh();setStatus("Add two or more tracks to begin.")};
+  [["album","albumEdited"],["artist","artistEdited"]].forEach(([id,flag])=>{
+    ui[id].oninput=()=>{state[flag]=true;invalidate()};
+    ui[id].onchange=()=>{if(!ui[id].value.trim()){state[flag]=false;refresh()}}});
+  ui.cover.onchange=async()=>{const file=ui.cover.files[0];
+    try{if(file){state.art=await toRgb332(file);state.artEdited=true;showCover(state.art);invalidate();setStatus("Artwork ready: fitted to 92×92 RGB332.")}}
+    catch(error){setStatus("Could not read artwork: "+(error.message||String(error)))}ui.cover.value=""};
   ui.build.onclick=build;["dragenter","dragover"].forEach(type=>ui.drop.addEventListener(type,e=>{e.preventDefault();ui.drop.classList.add("drag")}));
   ["dragleave","drop"].forEach(type=>ui.drop.addEventListener(type,e=>{e.preventDefault();ui.drop.classList.remove("drag")}));
   ui.drop.addEventListener("drop",e=>add(e.dataTransfer.files));ui.drop.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();ui.files.click()}});

@@ -18,9 +18,12 @@
     <section class="panel"><div class="panel-head"><div><h2>Track order</h2><p id="summary">No tracks added.</p></div>
       <button id="clear" class="quiet" type="button" disabled>Clear</button></div><ol id="tracks" aria-live="polite"></ol></section>
     <section class="panel settings">
+      <label>Album title<input id="album" placeholder="Untitled Album"></label>
+      <label>Album artist<input id="artist" placeholder="Unknown Artist"></label>
       <label>Output filename<span class="filename"><input id="name" value="album"><span>.flac</span></span></label>
       <label>Compression<select id="compression"><option value="5" selected>Level 5 — balanced</option>
         <option value="8">Level 8 — smallest, slower</option><option value="0">Level 0 — fastest, larger</option></select></label>
+      <label>Album artwork<span class="art-picker"><input id="cover" type="file" accept="image/*"><canvas id="coverPreview" width="92" height="92" aria-label="Artwork preview"></canvas></span></label>
     </section>
     <section class="actions"><button id="build" class="primary" type="button" disabled>Build album FLAC</button>
       <a id="download" class="button" hidden>Download album</a></section>
