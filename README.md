@@ -7,6 +7,8 @@ Ogg Vorbis, WAV, and FLAC files; supports gapless FLAC albums and mixed-format
 TAR playlists; and renders three audio-driven visualizers with an optional
 metadata and album-art interface. Playback and visualization are implemented
 natively in FPGA logic, with no HPS software or soft CPU in the decode path.
+[MiSTer-Raster](https://github.com/aquasock/MiSTer-Raster) is its video companion,
+built and qualified the same way.
 
 ## What it does
 
@@ -124,7 +126,15 @@ The companion application performs all work locally and provides two modes:
   payloads are not decoded, transcoded, or modified.
 - **Gapless FLAC Album** losslessly joins as many as 99 compatible FLAC tracks
   into one continuous FLAC with an embedded CUESHEET, SEEKTABLE, display
-  metadata, and artwork. Every decoded source sample is retained in order.
+  metadata, and artwork. Every decoded source sample is retained in order. Album
+  title, album artist, and artwork are prefilled from the tracks' tags and can be
+  edited, as in the playlist builder. An optional **Convert high-resolution
+  FLACs** setting (off by default) also accepts stereo 16- or 24-bit tracks above
+  44.1 kHz and downsamples them to 44.1 or 48 kHz at 16 bits, choosing whichever
+  needs the simpler conversion. Only the tracks that need it are converted
+  (a lossy step with dither, and any clipping is reported); the rest are copied
+  unchanged. See the [FLAC builder README](tools/media-builder/flac/README.md).
+  Hardware testing of albums converted to 48 kHz is still pending.
 
 Neither format requires a proprietary extractor. Mixed-playlist files can be
 recovered with ordinary TAR software, while the gapless album remains a
@@ -140,12 +150,16 @@ standards-compliant FLAC with an embedded CUESHEET.
   top-level platform wrapper.
 - `tools/media-builder/` — self-contained local browser application for creating
   supported albums and playlists.
+- `tools/` — `build_seeds.sh`, `run_timing_sweep.py`, and
+  `check_timing_corners.tcl` for isolated builds and timing sign-off.
+- `docs/` — build, qualification, changelog, and shared-history documentation.
 
 ## Documentation
 
 - [Building](docs/BUILD.md)
 - [Build qualification](docs/QUALIFICATION.md)
 - [Changelog](docs/CHANGELOG.md)
+- [Media builder](tools/media-builder/README.md)
 - [Media Player history](docs/history/MEDIA_PLAYER_CHANGELOG.md), the common origin of Phosphor and Raster
 
 ## License
