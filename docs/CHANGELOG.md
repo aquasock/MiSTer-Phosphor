@@ -2,11 +2,18 @@
 
 All notable changes to MiSTer-Phosphor. Phosphor shares its origin with MiSTer
 Media Player (v0.1.0 to v0.9.5); that project's history is kept in
-[history/](history/MEDIA_PLAYER_CHANGELOG.md). There is no tagged Phosphor release
-yet, so everything below is unreleased. Build results, seeds and hardware
-acceptance are in [QUALIFICATION.md](QUALIFICATION.md).
+[history/](history/MEDIA_PLAYER_CHANGELOG.md). Phosphor's own version numbers start
+at v0.1.0 and are unrelated to Media Player's. Build results, seeds and hardware
+acceptance are in [QUALIFICATION.md](QUALIFICATION.md), and the release notes are in
+[RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-20
+
+The first Phosphor release: four native audio decoders, gapless FLAC albums,
+mixed-format TAR playlists and three visualizers, built as `Phosphor.rbf` from
+seed 87.
 
 ### Fixed
 
@@ -29,10 +36,12 @@ acceptance are in [QUALIFICATION.md](QUALIFICATION.md).
   44.1 or 48 kHz / 16-bit, whichever needs the simpler conversions, with a polyphase
   Kaiser-windowed sinc resampler, TPDF dither, CD-sector CUESHEET markers and
   reported clipping. Tracks already in the target format are copied bit for bit.
+  Albums converted to 48 kHz play on hardware.
 - `validate_album.py` accepts 48 kHz albums and checks CD-sector alignment.
 - Build tooling: `tools/build_seeds.sh` (isolated per-seed builds plus the timing
   sweep), `tools/run_timing_sweep.py` and `tools/check_timing_corners.tcl`.
-- Documentation in `docs/` with a living [QUALIFICATION.md](QUALIFICATION.md).
+- Documentation in `docs/` with a living [QUALIFICATION.md](QUALIFICATION.md) and
+  [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ### Changed
 

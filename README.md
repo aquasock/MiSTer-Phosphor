@@ -90,7 +90,8 @@ the core's games directory:
 ```
 
 Select **Phosphor** under `_Other`, open the MiSTer OSD, choose **Load Audio**,
-and select a supported standalone file, FLAC album, or TAR playlist.
+and select a supported standalone file, FLAC album, or TAR playlist. The current
+release is v0.1.0; see the [release notes](docs/RELEASE_NOTES.md).
 
 ## Building
 
@@ -134,7 +135,7 @@ The companion application performs all work locally and provides two modes:
   needs the simpler conversion. Only the tracks that need it are converted
   (a lossy step with dither, and any clipping is reported); the rest are copied
   unchanged. See the [FLAC builder README](tools/media-builder/flac/README.md).
-  Hardware testing of albums converted to 48 kHz is still pending.
+  Albums converted to 48 kHz have been played on hardware.
 
 Neither format requires a proprietary extractor. Mixed-playlist files can be
 recovered with ordinary TAR software, while the gapless album remains a
@@ -159,6 +160,7 @@ standards-compliant FLAC with an embedded CUESHEET.
 - [Building](docs/BUILD.md)
 - [Build qualification](docs/QUALIFICATION.md)
 - [Changelog](docs/CHANGELOG.md)
+- [Release notes](docs/RELEASE_NOTES.md)
 - [Media builder](tools/media-builder/README.md)
 - [Media Player history](docs/history/MEDIA_PLAYER_CHANGELOG.md), the common origin of Phosphor and Raster
 

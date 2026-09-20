@@ -9,12 +9,14 @@ in [BUILD.md](BUILD.md). MiSTer-Raster keeps the same kind of record.
 | # | Date | Build | Selected seed | RBF SHA-256 | Hardware status |
 |---|---|---|---:|---|---|
 | 1 | 2026-09-19 | Title/artwork fix for playlist entries 100 and above | 61 | `31ea7828…e9a` | Hardware validation passed (owner-reported) |
-| 2 | 2026-09-20 | **Current source:** fix plus reset exemption in the SDC and the `Phosphor` project rename | **87** | `7ca53338…8121` | Not yet tested on hardware |
+| 2 | 2026-09-20 | **Current source:** fix plus reset exemption in the SDC and the `Phosphor` project rename | **87** | `7ca53338…8121` | Partly tested: gapless FLAC albums at 44.1 and 48 kHz play (owner-reported) |
 
-Build 1 is the validated release, `Phosphor_20260919.rbf`. Build 2 is what the
-repository builds today; it has been compiled and timing-swept but not deployed.
-Neither result is a claim of complete board-I/O timing coverage (see
-[Timing coverage](#timing-coverage-and-limits)). Every hardware statement here is
+Build 1 is the hardware-validated build, `Phosphor_20260919.rbf`, which was not
+released. Build 2 is what the repository builds and is released as v0.1.0 (see
+[RELEASE_NOTES.md](RELEASE_NOTES.md)). It has been timing-swept and given a first
+hardware check (see [Current source](#current-source-build-2)); most of its feature
+set has not yet been exercised on hardware. Neither result is a claim of complete
+board-I/O timing coverage (see [Timing coverage](#timing-coverage-and-limits)). Every hardware statement here is
 the owner's report; no agent-run playback is claimed.
 
 ## Current source (build 2)
@@ -54,7 +56,19 @@ comment-only edit, seed 87 was rebuilt the same day and produced the same bitstr
 byte for byte (SHA-256 `7ca53338…8121`) with identical resources, so the cleanup does
 not change the design.
 
-## Validated release (build 1)
+**Hardware.** On 2026-09-20 the owner ran this bitstream (`Phosphor_20260920.rbf`,
+the release copy of the seed 87 build) and reported that it plays all the recent
+FLAC files on the drive. Those are five gapless albums with embedded CUESHEETs, all
+of which pass `validate_album.py`: *The Dark Side of the Moon* (10 tracks), *The
+Wall* (26) and *The Who - Greatest Hits* (19) at 44.1 kHz, and *Thriller* and
+*Purple Rain* (9 tracks each) at 48 kHz. The two 48 kHz albums were made by the FLAC
+builder's high-resolution conversion from 96 kHz / 24-bit sources, so this is also
+the first hardware result for builder-made 48 kHz albums. The report did not cover
+seeking, previous/next, the last-to-first wrap or artwork, and nothing else has been
+tested on this bitstream yet: TAR playlists (including entries 100 and above), MP3,
+Ogg, WAV, standalone files and the visualizers.
+
+## Validated build (build 1)
 
 Built from `ddb6106` plus `title-artwork-fix.patch` in an isolated copy. The old
 metadata mux switched from M3U titles to FLAC/artwork at address 3240, which is
@@ -114,7 +128,7 @@ Local paths, on the build machine only (not in the repository):
 | Build | Location |
 |---|---|
 | 1 | `phosphor-title-fix-build-15a0_7gr/hardware-test-seed61/`: `Phosphor_20260919.rbf`, source archive `Phosphor_title_fix_source.tar.gz`, `title-artwork-fix.patch`, checksums, per-seed timing reports and the fit-time SDC. Every file in its `SHA256SUMS`, and all 210 source-manifest entries, were re-verified on 2026-09-20. |
-| 2 | `phosphor-3seed-build/seed*/output_files/Phosphor.rbf` with `timing_results.json` |
+| 2 | `phosphor-3seed-build/seed*/output_files/Phosphor.rbf` with `timing_results.json`; release copy `release-20260920/Phosphor_20260920.rbf` (built from commit `bb0b6b6`, SHA-256 as above) |
 
 Release copies are named `Phosphor_YYYYMMDD.rbf` and installed to
 `/media/fat/_Other/`.
