@@ -1,0 +1,4 @@
+# Store and check out every file byte for byte. Line endings here are deliberate and
+# differ by file: the MiSTer framework (sys/) carries mixed endings, and a rewrite by
+# Git (or an editor) turns a two-line change into a whole-file diff.
+* -text

@@ -5,7 +5,7 @@
 module media_flac_album_ui(
  input wire clk,enabled,widescreen,
  input wire metadata_valid,artwork_valid,current_title_long,input wire [7:0] track_count,current_track,
- output reg [13:0] metadata_address=0,input wire [7:0] metadata_data,
+ output reg [13:0] metadata_address=0,output wire metadata_artwork_request,input wire [7:0] metadata_data,
  input wire [23:0] rgb,input wire hs,vs,de,layout_de,
  output reg [23:0] rgb_out=0,output reg hs_out=0,vs_out=0,de_out=0
 );
@@ -248,6 +248,9 @@ module media_flac_album_ui(
  wire [6:0] art_x=(x-12'd36)>>1;
  wire [6:0] art_y=(ui_y-12'd8)>>1;
  (* multstyle="logic" *) wire [13:0] art_row_offset=art_y*92;
+ // The legacy title and artwork address ranges overlap after title 99.
+ // Carry the request kind separately; length reads always select text.
+ assign metadata_artwork_request=art_request && !(length_fetch>=1 && length_fetch<=6);
  always @* begin
   if(length_fetch==1||length_fetch==2)metadata_address=14'd39;
   else if(length_fetch==3||length_fetch==4)metadata_address=14'd71;

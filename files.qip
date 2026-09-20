@@ -1,7 +1,7 @@
 # PLL: Cyclone V's clock-select hardware requires CLK_VIDEO to come from a
 # PLL output, not a raw input pin (a fitter constraint, discovered via a
 # real quartus_map error on sys_top.v's video clock-switch blocks) -- reused
-# verbatim from the sibling MiSTer-Phosphor project's own generated PLL
+# verbatim from the former MiSTer Media Player project's own generated PLL
 # wrapper (same board/chip, an already-working 4-output configuration; this
 # core only uses two of the four outputs, for clk_sys and clk_video).
 set_global_assignment -name VERILOG_FILE rtl/pll.v
@@ -35,8 +35,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mp3_pcm_pack.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_fifo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio_pcm_output_adapter.sv
 
-# sys/sys_top.v (copied from the sibling MiSTer-Phosphor project along with
-# the rest of sys/ -- see MiSTer-Phosphor.sv's header comment) directly
+# sys/sys_top.v (copied from the former MiSTer Media Player project along with
+# the rest of sys/ -- see Phosphor.sv's header comment) directly
 # instantiates a handful of Phosphor-specific modules for its own Menu
 # music-passthrough and OSD-visualizer features. This standalone core
 # doesn't participate in either, but still needs *something* satisfying
@@ -97,7 +97,7 @@ set_global_assignment -name HEX_FILE rtl/media_overlay_blend_b.hex
 # into one core.
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wav_decoder.sv
 
-# FLAC: reused verbatim from MiSTer-Phosphor (rtl/audio/flac/*.sv), fixed
+# FLAC: reused verbatim from the former MiSTer Media Player (rtl/audio/flac/*.sv), fixed
 # 44.1kHz/16-bit/stereo profile, real external DDR frame storage (this
 # project's first DDR client) -- see docs/MP3.md. CUESHEET album navigation
 # and seek support are included alongside it.
@@ -152,12 +152,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_audio_seq
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_audio_decoder.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/audio/vorbis/vorbis_stream_decoder.sv
 
-set_global_assignment -name SYSTEMVERILOG_FILE MiSTer-Phosphor.sv
+set_global_assignment -name SYSTEMVERILOG_FILE Phosphor.sv
 
 # Project-specific timing constraints (see the file's own header for what
 # it does and why): loaded after sys/sys_top.sdc, whose own clock-group
 # assignment it refines, and after the reused HDMI-native-audio framework
 # files above, whose own accompanying constraints (never copied over from
-# MiSTer-Phosphor's MediaPlayer.sdc until this point) it ports the relevant
+# the former MiSTer Media Player's MediaPlayer.sdc until this point) it ports the relevant
 # parts of.
-set_global_assignment -name SDC_FILE MiSTer-Phosphor.sdc
+set_global_assignment -name SDC_FILE Phosphor.sdc

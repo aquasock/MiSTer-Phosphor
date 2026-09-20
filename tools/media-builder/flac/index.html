@@ -25,12 +25,16 @@
         <option value="8">Level 8 — smallest, slower</option><option value="0">Level 0 — fastest, larger</option></select></label>
       <label>Album artwork<span class="art-picker"><input id="cover" type="file" accept="image/*"><canvas id="coverPreview" width="92" height="92" aria-label="Artwork preview"></canvas></span></label>
     </section>
+    <section class="panel convert">
+      <label class="check"><input type="checkbox" id="convert"><span>Convert high-resolution FLACs (above 44.1 kHz, or 24-bit) to 44.1 or 48 kHz / 16-bit</span></label>
+      <p id="convertNote" class="note"></p>
+    </section>
     <section class="actions"><button id="build" class="primary" type="button" disabled>Build album FLAC</button>
       <a id="download" class="button" hidden>Download album</a></section>
     <section class="status" aria-live="polite"><progress id="progress" max="1" value="0"></progress>
       <p id="status">Add two or more tracks to begin.</p></section>
     <details><summary>Output requirements and privacy</summary>
-      <p>Inputs must be native FLAC, 44.1 kHz, 16-bit, stereo, with CD-sector-aligned lengths. The output contains a standard embedded CUESHEET, a frame-aligned SEEKTABLE, and the compact MP3A metadata/artwork block used by Phosphor. Every decoded input sample is retained in its original order; the builder never trims, pads, fades, or otherwise edits the audio. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p></details>
+      <p>Inputs must be native FLAC, 44.1 kHz, 16-bit, stereo, with CD-sector-aligned lengths, unless conversion is turned on: then 16- or 24-bit stereo tracks above 44.1 kHz are downsampled to 44.1 or 48 kHz / 16-bit (a lossy step; see the note under the option). The output contains a standard embedded CUESHEET, a frame-aligned SEEKTABLE, and the compact MP3A metadata/artwork block used by Phosphor. Without conversion, every decoded input sample is retained in its original order; the builder never trims, pads, fades, or otherwise edits the audio. Audio is decoded and losslessly re-encoded locally; no files are uploaded.</p></details>
   </main>
   <script src="vendor/libflac.js"></script>
   <script src="app.js"></script>

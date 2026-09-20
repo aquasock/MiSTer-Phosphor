@@ -7,7 +7,7 @@
 //
 // Framework: sys/ here is the standard MiSTer core framework (hps_io,
 // audio_out, sd_card, the sys_top.v wrapper, board/pin configuration via
-// sys.tcl) -- unmodified, copied from the sibling MiSTer-Phosphor project
+// sys.tcl) -- unmodified, copied from the former MiSTer Media Player project
 // (same author, same board, genuinely generic/reusable, not project-
 // specific). Three more files are reused the same way, verbatim, because
 // they're already-solved, self-contained, non-Phosphor-specific building
@@ -58,8 +58,8 @@ assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE,
 // DDRAM: this project's first real DDR client, for FLAC's frame store
 // (flac_frame_store.sv double-buffers full decoded frames there -- too
 // large for on-chip block RAM at full profile). Driven for real further
-// down, direct passthrough with no arbiter: unlike MiSTer-Phosphor, which
-// muxes this same interface between its movie (video) and music (FLAC)
+// down, direct passthrough with no arbiter: unlike the former MiSTer Media Player, which
+// muxed this same interface between its movie (video) and music (FLAC)
 // DDR clients, this core has no video DDR client to mux against.
 
 assign VGA_SL      = 0;
@@ -96,7 +96,7 @@ assign VIDEO_ARY = player_widescreen_option ? 13'd9  : 13'd3;
 // Cyclone V's dedicated clock-select hardware requires CLK_VIDEO to be
 // driven by a PLL output, not a raw input pin -- a real quartus_map error
 // on sys_top.v's video clock-switch blocks, not a style choice. Reuses
-// MiSTer-Phosphor's own already-working 4-output PLL wrapper (same board/
+// the former MiSTer Media Player's own already-working 4-output PLL wrapper (same board/
 // chip); only outclk_0 (clk_sys, 20MHz) and outclk_1 (clk_video, 25.2MHz)
 // are used here. The whole decode pipeline has enormous real-time slack
 // even at 20MHz (docs/MP3.md), so the specific rate doesn't matter for
@@ -118,8 +118,8 @@ localparam CONF_STR = {
 	// chunks with no delimiters, so a 4-character extension like FLAC can't
 	// be listed directly. "FL*" (a `*` as the 3rd character of a chunk)
 	// means "match anything starting with these first two letters" on the
-	// MiSTer Main/ARM side -- the same trick MiSTer-Phosphor's own CONF_STR
-	// already uses ("MPGFL*" = "MPG" + "FL*") for this identical problem.
+	// MiSTer Main/ARM side -- the same trick the former MiSTer Media Player's own CONF_STR
+	// used ("MPGFL*" = "MPG" + "FL*") for this identical problem.
 	"S0,MP3WAVFL*OGGTAR,Load Audio;",
 	"-;",
 	"T1,Reset;",
@@ -419,7 +419,7 @@ media_ogg_tail_probe ogg_tail_probe
 );
 
 ///////// Format dispatch: sniff the first 4 bytes to pick MP3/WAV/FLAC/Ogg /////////
-// Content-sniffed, not extension-based, mirroring MiSTer-Phosphor's own
+// Content-sniffed, not extension-based, mirroring the former MiSTer Media Player's own
 // media_duration_probe.sv, which tells its FLAC path apart from its movie
 // path the same way rather than using separate OSD entries.
 //
@@ -1094,7 +1094,7 @@ media_pcm_landing_q #(.WIDTH(64)) ogg_single_landing
 	.output_ready(PLAYER_PCM_READY),.landed(ogg_single_landed)
 );
 
-// FLAC: reused verbatim from MiSTer-Phosphor. Its own start/cancel/reset
+// FLAC: reused verbatim from the former MiSTer Media Player. Its own start/cancel/reset
 // split (distinct from wav_decoder's simpler "just hold reset" pattern)
 // exists because a DDR request already in flight must drain cleanly rather
 // than being abruptly abandoned -- cancel lets flac_frame_store's own state
@@ -1510,7 +1510,11 @@ flac_album_metadata embedded_album_metadata(
 	.artwork_valid(flac_album_artwork_valid),.track_count(flac_album_metadata_count),
 	.current_title_long(flac_album_title_long));
 
-assign PLAYER_META_DATA=(playlist_active&&(PLAYER_META_ADDRESS<14'd3240)) ?
+// Both metadata RAMs have a synchronous read port. Delay the request kind
+// alongside the address read so title/artwork boundaries select the same pixel.
+reg player_meta_artwork_read=0;
+always @(posedge PLAYER_META_CLOCK) player_meta_artwork_read<=PLAYER_META_ARTWORK_REQUEST;
+assign PLAYER_META_DATA=(playlist_active&&!player_meta_artwork_read) ?
 	m3u_metadata_data : flac_album_metadata_data;
 assign PLAYER_META_VALID=playlist_active?m3u_metadata_valid:flac_album_metadata_valid;
 assign PLAYER_META_ARTWORK_VALID=flac_album_artwork_valid;
@@ -1564,7 +1568,7 @@ assign stream_ready = (ogg_tail_active||ogg_seek_scanning) ? 1'b1 :
 assign PLAYER_MUSIC = native_rate_valid && (wav_active || flac_active || ogg_active);
 assign PLAYER_NATIVE_48K = native_rate_valid && native_sample_rate==48000;
 // Held whenever neither WAV nor FLAC is the active format (sniffing/
-// replaying/MP3 all included), mirroring MiSTer-Phosphor's own
+// replaying/MP3 all included), mirroring the former MiSTer Media Player's own
 // `reset_mpeg2 || !media_music_mode` pattern for this same signal -- keeps
 // the CD-audio-side FIFO/CDC logic cleanly drained while unused, not just
 // reset for one cycle on new_file.

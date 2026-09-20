@@ -19,7 +19,7 @@ def main():
   if last:break
  if stream is None or len(stream)!=34:raise SystemExit("FAIL: STREAMINFO")
  packed=int.from_bytes(stream[10:18],"big");rate=(packed>>44)&0xfffff;channels=((packed>>41)&7)+1;bits=((packed>>36)&31)+1;total=packed&0xfffffffff
- if(rate,channels,bits)!=(44100,2,16):raise SystemExit(f"FAIL: profile {rate} Hz/{bits}-bit/{channels}ch")
+ if rate not in(44100,48000) or (channels,bits)!=(2,16):raise SystemExit(f"FAIL: profile {rate} Hz/{bits}-bit/{channels}ch")
  if cue is None or len(cue)<396 or not cue[136]&128:raise SystemExit("FAIL: CD CUESHEET missing")
  if seeks is None or len(seeks)%18 or not 1<=len(seeks)//18<=512:raise SystemExit("FAIL: SEEKTABLE")
  count=cue[395]
@@ -36,6 +36,7 @@ def main():
    starts.append(sample)
   off+=indices*12
  if off!=len(cue)or not starts or starts[0]!=0 or starts!=sorted(set(starts)):raise SystemExit("FAIL: CUESHEET layout")
+ if total%588 or any(s%588 for s in starts):raise SystemExit("FAIL: CUESHEET offsets are not CD-sector (588-sample) aligned")
  previous=-1
  for i in range(0,len(seeks),18):
   sample=int.from_bytes(seeks[i:i+8],"big");offset=int.from_bytes(seeks[i+8:i+16],"big");frame=int.from_bytes(seeks[i+16:i+18],"big")

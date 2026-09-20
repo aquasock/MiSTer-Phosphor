@@ -1844,10 +1844,11 @@ media_audio_visualizers core_visualizer(
 	.rgb({core_r_out,core_g_out,core_b_out}),.hs(core_hs_emu),.vs(core_vs_emu),.de(core_de_emu),.layout_de(core_de_emu),
 	.rgb_out(visual_rgb),.hs_out(visual_hs),.vs_out(visual_vs),.de_out(visual_de));
 
+wire player_meta_artwork_request;
 media_player_overlay player_overlay(
 	.control_clk(player_ui_clock),.video_clk(clk_vid),.control_state(player_ui_state),
 	.subtitle_command(player_subtitle_command),.subtitle_ack(player_subtitle_ack),
-	.metadata_address(player_meta_address),.metadata_data(player_meta_data),
+	.metadata_address(player_meta_address),.metadata_artwork_request(player_meta_artwork_request),.metadata_data(player_meta_data),
 	.metadata_valid(player_meta_valid),.metadata_track_count(player_meta_track_count),.metadata_current_track(player_meta_current_track),
 	.metadata_artwork_valid(player_meta_artwork_valid),
 	.metadata_title_long(player_meta_title_long),
@@ -1934,7 +1935,7 @@ emu emu
 	.PLAYER_UI_STATE(player_ui_state),
 	.PLAYER_SUBTITLE_COMMAND(player_subtitle_command),
 	.PLAYER_SUBTITLE_ACK(player_subtitle_ack),
-	.PLAYER_META_CLOCK(clk_vid),.PLAYER_META_ADDRESS(player_meta_address),.PLAYER_META_DATA(player_meta_data),
+	.PLAYER_META_CLOCK(clk_vid),.PLAYER_META_ADDRESS(player_meta_address),.PLAYER_META_ARTWORK_REQUEST(player_meta_artwork_request),.PLAYER_META_DATA(player_meta_data),
 	.PLAYER_META_VALID(player_meta_valid),.PLAYER_META_TRACK_COUNT(player_meta_track_count),
 	.PLAYER_META_ARTWORK_VALID(player_meta_artwork_valid),
 	.PLAYER_META_TITLE_LONG(player_meta_title_long),

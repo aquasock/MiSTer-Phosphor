@@ -14,7 +14,9 @@ The two tabs provide:
 - **Gapless FLAC Album** — losslessly combines as many as 99 compatible FLAC
   tracks into one continuous FLAC with an embedded CUESHEET, SEEKTABLE, display
   metadata, and artwork. Decoded source samples are retained in their original
-  order without trimming, padding, fading, or lossy conversion.
+  order without trimming, padding, fading, or lossy conversion. An optional,
+  off-by-default setting instead downsamples stereo tracks above 44.1 kHz, or
+  24-bit, to 44.1 or 48 kHz / 16-bit; only the tracks that need it are converted.
 
 All processing happens locally in the browser. Files are never uploaded.
 

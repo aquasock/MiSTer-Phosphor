@@ -3,7 +3,7 @@
 module media_player_overlay(
  input wire control_clk,video_clk,input wire [90:0] control_state,
  input wire [34:0] subtitle_command,output wire subtitle_ack,
- output wire [13:0] metadata_address,input wire [7:0] metadata_data,
+ output wire [13:0] metadata_address,output wire metadata_artwork_request,input wire [7:0] metadata_data,
  input wire metadata_valid,metadata_artwork_valid,metadata_title_long,
  input wire [7:0] metadata_track_count,metadata_current_track,
  input wire [23:0] rgb,input wire hs,vs,de,
@@ -30,7 +30,7 @@ media_flac_album_ui album_ui(
  .clk(video_clk),.enabled(state_hdmi[72]),.widescreen(state_hdmi[71]),
  .metadata_valid(metadata_video[18]),.artwork_valid(metadata_video[17]),.current_title_long(metadata_video[16]),
  .track_count(metadata_video[15:8]),.current_track(metadata_video[7:0]),
- .metadata_address(metadata_address),.metadata_data(metadata_data),
+ .metadata_address(metadata_address),.metadata_artwork_request(metadata_artwork_request),.metadata_data(metadata_data),
  .rgb(rgb),.hs(hs),.vs(vs),.de(de),.layout_de(layout_de),
  .rgb_out(album_rgb),.hs_out(album_hs),.vs_out(album_vs),.de_out(album_de));
 wire text_we,object_we,commit,pending,acknowledged;

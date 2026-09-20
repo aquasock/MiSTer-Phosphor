@@ -93,21 +93,26 @@ and select a supported standalone file, FLAC album, or TAR playlist.
 ## Building
 
 The project targets Quartus Prime 17.0.2 Lite and the Cyclone V
-`5CSEBA6U23I7`. Open `MiSTer-Phosphor.qpf`, or build from a Quartus command
+`5CSEBA6U23I7`. Open `Phosphor.qpf`, or build from a Quartus command
 shell with:
 
 ```sh
-quartus_sh --flow compile MiSTer-Phosphor
+quartus_sh --flow compile Phosphor
 ```
+
+The Quartus project is named Phosphor, so a build produces `Phosphor.rbf`; copy it to a
+dated `Phosphor_YYYYMMDD.rbf` name when packaging.
 
 `files.qip`, the complete `rtl/` and `sys/` trees, and all referenced `.hex`
 and `.mem` initialization files must be present. `sys/build_id.tcl` generates
 `build_id.v` automatically before compilation.
 
 The design is close to the device's physical M10K and DSP limits, and fitter
-placement materially affects timing closure. Release candidates therefore use
-three independent fitter seeds and publish the passing result with the best
-timing margin rather than relying on one fixed seed.
+placement materially affects timing closure. `Phosphor.qsf` pins **seed 87**, the
+timing-qualified seed on the current source. `tools/build_seeds.sh` builds seeds in
+isolated copies of the tree and runs the eight-corner timing sweep on each; see
+[Building](docs/BUILD.md) for the procedure and [Qualification](docs/QUALIFICATION.md)
+for every build's seeds, resources, timing coverage limits and hardware acceptance.
 
 ## Preparing media
 
@@ -127,7 +132,7 @@ standards-compliant FLAC with an embedded CUESHEET.
 
 ## Source layout
 
-- `MiSTer-Phosphor.sv` — core integration, format dispatch, playlist control,
+- `Phosphor.sv` — core integration, format dispatch, playlist control,
   transport, and MiSTer-facing configuration.
 - `rtl/` — audio decoders, visualizers, metadata/container parsers, UI, and
   platform-specific audio control.
@@ -135,6 +140,13 @@ standards-compliant FLAC with an embedded CUESHEET.
   top-level platform wrapper.
 - `tools/media-builder/` — self-contained local browser application for creating
   supported albums and playlists.
+
+## Documentation
+
+- [Building](docs/BUILD.md)
+- [Build qualification](docs/QUALIFICATION.md)
+- [Changelog](docs/CHANGELOG.md)
+- [Media Player history](docs/history/MEDIA_PLAYER_CHANGELOG.md), the common origin of Phosphor and Raster
 
 ## License
 

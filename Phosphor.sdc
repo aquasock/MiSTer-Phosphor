@@ -3,7 +3,7 @@
 # files.qip's trailing SDC_FILE assignment), so these refine its clock-group
 # assignment and add constraints for the framework modules this core reuses
 # verbatim but whose own accompanying timing constraints were never copied
-# over from the sibling MiSTer-Phosphor project.
+# over from the former MiSTer Media Player project.
 #
 # This file was written after running TimeQuest for the first time on this
 # project and finding real (if largely misleading) violations -- see
@@ -17,20 +17,20 @@
 # independently divided outputs of the same PLL with no defined phase
 # relationship, and this project's only crossing between them (the board
 # reset asserting into the clk_video_pll-domain blanked-video timing
-# counters in MiSTer-Phosphor.sv) is a single-bit asynchronous level, not data
+# counters in Phosphor.sv) is a single-bit asynchronous level, not data
 # needing a synchronous check. This is what caused the large
 # clk_video_pll-domain TNS found on the first STA run.
 set_clock_groups -exclusive \
     -group [get_clocks {emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}] \
     -group [get_clocks {emu|pll|pll_inst|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}]
 
-# --- Everything below ported from MediaPlayer.sdc (MiSTer-Phosphor), scoped
+# --- Everything below ported from MediaPlayer.sdc (the former MiSTer Media Player), scoped
 # to only the framework modules this core actually reuses verbatim:
 # rtl/video_config_cdc.sv and the rtl/platform/ HDMI-native-audio cascade
 # (hdmi_audio_config, hdmi_i2c_owner, hdmi_i2c_write_watch,
 # i2c_register_master, media_audio_clocks, media_audio_rate_control,
 # media_hdmi_audio_control, media_native_audio). Everything in
-# MediaPlayer.sdc specific to Phosphor's own MPEG-2 framebuffer, OSD
+# MediaPlayer.sdc specific to the former Media Player's own MPEG-2 framebuffer, OSD
 # compositor, media_ui_scene, or media_session_control does NOT apply here
 # -- this core has none of those modules -- and is intentionally omitted.
 
@@ -102,6 +102,18 @@ if {[get_collection_size $native_audio_async_reset_srcs] < 2} {error "Missing an
 foreach chain {wr_reset_sync rd_reset_sync ref_reset_sync movie_reset_sync out_reset_sync prefill_sync eof_sync} {
     set target [format {*media_native_audio:*|%s[*]} $chain]
     set_false_path -from $native_audio_async_reset_srcs -to [get_keepers $target]
+}
+
+# File detection, virtual entry changes and seek controls all assert the
+# native PCM FIFO reset asynchronously. Constrain the reset pins themselves
+# rather than extending the legacy list of individual control registers.
+# These four three-stage chains have async assertion and synchronous release;
+# prefill/eof consumers remain held by rd_reset_sync[2]. Only CLRN is exempt:
+# all D-pin and stage-to-stage release timing remains enabled.
+foreach chain {wr_reset_sync rd_reset_sync prefill_sync eof_sync} {
+    set reset_pins [get_pins [format {*native_audio*|%s*|clrn} $chain]]
+    if {[get_collection_size $reset_pins] != 3} {error "Expected three asynchronous reset pins for $chain"}
+    set_false_path -to $reset_pins
 }
 
 # The native output is selected from two independently-running PLLs. Exactly
