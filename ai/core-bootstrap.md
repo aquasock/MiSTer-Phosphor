@@ -1,0 +1,1 @@
+We are resuming a project. Locate and open the authoritative project-control file /ai/core.md from the GitHub repository: https://github.com/aquasock/MiSTer-Phosphor and follow the instructions under "AI Agent Recovery Policy".
